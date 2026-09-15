@@ -163,6 +163,8 @@ PAGE = r"""<!doctype html>
            justify-content: space-between; align-items: center; gap: 12px; white-space: nowrap;
            border-radius: 6px; }
   .fitem:hover { background: #2a2e35; }
+  .fitem.sel { background: #23303f; box-shadow: inset 0 0 0 1px #2f6fed; }
+  .fitem .check { color: #4d9bff; margin-left: 8px; font-weight: 700; }
   .fitem .submenu { display: none; position: absolute; left: 100%; top: -6px; background: #1b1e24;
                     border: 1px solid #3a3f47; border-radius: 8px; padding: 4px; min-width: 160px; }
   .fitem:hover > .submenu { display: block; }
@@ -848,9 +850,11 @@ function _fnode(n, cnt) {
   const arrow = has ? '<span class="arrow">›</span>' : '';
   const sub = has ? '<div class="submenu">' + n.children.map(c => _fnode(c, cnt)).join('') + '</div>' : '';
   const dot = '<span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + (COLORS[n.id]||'#888') + ';margin-right:6px"></span>';
-  return '<div class="fitem" onclick="setFilter(\'' + n.id + '\'); event.stopPropagation();">' +
+  const sel = (n.id === filterCat);
+  const check = sel ? '<span class="check">✓</span>' : '';
+  return '<div class="fitem' + (sel ? ' sel' : '') + '" onclick="setFilter(\'' + n.id + '\'); event.stopPropagation();">' +
     '<span>' + dot + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (cnt[n.id]||0) + '</span></span>' +
-    arrow + sub + '</div>';
+    '<span>' + check + arrow + '</span>' + sub + '</div>';
 }
 function renderChips() {
   const box = document.getElementById('chips');
@@ -858,8 +862,10 @@ function renderChips() {
   const cnt = {};
   for (const v of VIDEOS) cnt[catOf(v)] = (cnt[catOf(v)]||0) + 1;
   const tree = catTree();
+  const allSel = !filterCat;
   box.innerHTML =
-    '<div class="fitem" onclick="setFilter(null); event.stopPropagation();"><span>全部分类</span></div>' +
+    '<div class="fitem' + (allSel ? ' sel' : '') + '" onclick="setFilter(null); event.stopPropagation();">' +
+      '<span>全部分类</span>' + (allSel ? '<span class="check">✓</span>' : '') + '</div>' +
     tree.map(n => _fnode(n, cnt)).join('');
   const btn = document.getElementById('filter-btn');
   if (btn) {
