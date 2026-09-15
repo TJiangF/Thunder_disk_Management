@@ -321,9 +321,14 @@ function visible(v){ return activeCats.has(catOf(v)); }
 function catSelect(v){
   const auto = v.auto_category || catOf(v);
   const cur = v.manual ? catOf(v) : '';
+  const autoNode = CATEGORIES.find(c => c.id === auto);
+  const autoPath = autoNode && autoNode.path ? autoNode.path.join(' / ') : (LABELS[auto] || auto);
   let h = '<select class="catsel" onclick="event.stopPropagation()" onchange="setManual(\'' + v.id + '\', this.value)">';
-  h += '<option value=""' + (cur===''?' selected':'') + '>自动分类-' + esc(LABELS[auto]||auto) + '</option>';
-  for (const c of CATEGORIES) h += '<option value="' + c.id + '"' + (cur===c.id?' selected':'') + '>' + esc(c.label || c.name) + '</option>';
+  h += '<option value=""' + (cur===''?' selected':'') + '>自动分类-' + esc(autoPath) + '</option>';
+  for (const c of CATEGORIES) {
+    const path = (c.path || [c.name]).join(' / ');
+    h += '<option value="' + c.id + '"' + (cur===c.id?' selected':'') + '>' + esc(path) + '</option>';
+  }
   h += '</select>';
   if (v.manual) h += ' <span class="badge">手动</span>';
   return h;
@@ -796,16 +801,22 @@ function renderChips() {
   for (const c of CATS) counts[c] = 0;
   for (const v of VIDEOS) counts[catOf(v)] = (counts[catOf(v)]||0) + 1;
   const box = document.getElementById('chips');
-  box.innerHTML = CATEGORIES.map(c =>
-    '<span class="chip ' + (activeCats.has(c.id)?'':'off') + '" onclick="toggleCat(\'' + c.id + '\')">' +
-    '<span class="dot" style="background:' + (COLORS[c.id]||'#888') + '"></span>' +
-    esc(c.label || c.name) + ' ' + (counts[c.id]||0) + '</span>').join('');
+  box.innerHTML = CATEGORIES.map(c => {
+    const path = (c.path || [c.name]).join(' / ');
+    const ind = c.depth ? '<span style="opacity:.5;margin:0 2px 0 4px">└</span>' : '';
+    return '<span class="chip ' + (activeCats.has(c.id)?'':'off') + '"' +
+      ' style="margin-left:' + (c.depth * 10) + 'px" title="' + esc(path) + '"' +
+      ' onclick="toggleCat(\'' + c.id + '\')">' +
+      '<span class="dot" style="background:' + (COLORS[c.id]||'#888') + '"></span>' +
+      ind + esc(c.name) + ' ' + (counts[c.id]||0) + '</span>';
+  }).join('');
 }
 function populateBatchSelect() {
   const sel = document.getElementById('batch-cat');
   if (!sel) return;
   sel.innerHTML = '<option value="">恢复自动</option>' +
-    CATEGORIES.map(c => '<option value="' + c.id + '">' + esc(c.label || c.name) + '</option>').join('');
+    CATEGORIES.map(c => '<option value="' + c.id + '">' +
+      esc((c.path || [c.name]).join(' / ')) + '</option>').join('');
 }
 function toggleCat(c) { activeCats.has(c) ? activeCats.delete(c) : activeCats.add(c); render(); }
 function renderStat() {
