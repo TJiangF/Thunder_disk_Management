@@ -219,7 +219,18 @@ PAGE = r"""<!doctype html>
   <section id="view-organize" class="hidden">
     <div class="row" style="margin-bottom:10px">
       <button onclick="loadOrganize(true)">重新生成方案</button>
-      <span class="stat">预览效果，暂不修改云盘。（需含全部文件的扫描才有准确的垃圾/大文件判断）</span>
+      <span class="stat">预览；勾选下面选项并点“执行”才会真正改动云盘。</span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="stat"><input type="checkbox" id="org-apply" checked> 执行移动</label>
+      <label class="stat"><input type="checkbox" id="org-del"> 删除空的源文件夹</label>
+      <label class="stat"><input type="checkbox" id="org-junk"> 清理垃圾文件夹</label>
+      <label class="stat"><input type="checkbox" id="org-other"> 含“成人-其他”</label>
+      <span class="stat">限量</span>
+      <input id="org-limit" type="number" min="1" placeholder="全部"
+             style="width:80px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:4px 8px">
+      <button class="danger" onclick="runOrganize()">执行</button>
+      <span id="org-msg" class="stat"></span>
     </div>
     <div id="organize-body"><p class="stat">加载中…</p></div>
   </section>
@@ -1191,6 +1202,47 @@ function markHere(btn) {
     });
 }
 
+/* ---------------- organize apply (from the page) ---------------- */
+async function runOrganize() {
+  const opts = {
+    apply: document.getElementById('org-apply').checked,
+    delete_folders: document.getElementById('org-del').checked,
+    clean_junk: document.getElementById('org-junk').checked,
+    include_other: document.getElementById('org-other').checked,
+    limit: parseInt(document.getElementById('org-limit').value, 10) || 0,
+  };
+  if (!opts.apply && !opts.clean_junk) { alert('请至少勾选“执行移动”或“清理垃圾文件夹”'); return; }
+  const what = [];
+  if (opts.apply) what.push('执行移动' + (opts.limit ? ('（前 ' + opts.limit + ' 个）') : '') + (opts.delete_folders ? ' + 删除空的源文件夹' : ''));
+  if (opts.clean_junk) what.push('清理垃圾文件夹');
+  if (opts.include_other) what.push('含成人-其他');
+  if (!confirm('确认：' + what.join('；') + '？\n（删除均为移入回收站，可恢复）')) return;
+  const msg = document.getElementById('org-msg');
+  try {
+    const r = await fetch('/organize/apply', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(opts)});
+    const j = await r.json();
+    if (!j.ok) { msg.textContent = j.error || '无法开始'; return; }
+    msg.textContent = '任务已开始…';
+    pollOrganize();
+  } catch (e) { msg.textContent = '失败：' + e; }
+}
+function pollOrganize() {
+  fetch('/organize/status').then(r => r.json()).then(s => {
+    const msg = document.getElementById('org-msg');
+    if (s.running) {
+      msg.textContent = (s.msg || '处理中…') + (s.total ? (' ' + s.current + '/' + s.total) : '');
+      setTimeout(pollOrganize, 1000);
+    } else if (s.error) {
+      msg.textContent = '出错：' + s.error;
+    } else if (s.finished) {
+      msg.textContent = '完成';
+      toast('整理任务完成，正在刷新方案…');
+      loadOrganize(true);
+    }
+  }).catch(() => setTimeout(pollOrganize, 1500));
+}
+
 /* ---------------- run shots from the page ---------------- */
 async function runShots(mode, count) {
   const msg = document.getElementById('shots-msg');
@@ -1445,7 +1497,8 @@ def _resume_index(videos: list[dict]) -> int:
 
 
 def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
-          play_url_fn=None, shots_fn=None, apply_fn=None, download_url_fn=None) -> dict:
+          play_url_fn=None, shots_fn=None, apply_fn=None, download_url_fn=None,
+          organize_fn=None) -> dict:
     dataset = videos
     by_id = {v["id"]: v for v in videos}
     resume_index = _resume_index(videos)
@@ -1462,7 +1515,28 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     apply_state = {"running": False, "finished": False, "current": 0, "total": 0,
                    "error": None, "results": []}
     apply_lock = threading.Lock()
+    organize_state = {"running": False, "finished": False, "current": 0, "total": 0,
+                      "msg": "", "error": None, "result": None}
+    organize_lock = threading.Lock()
     dedupe_cache: dict = {"groups": None}
+
+    def _organize_worker(opts: dict) -> None:
+        try:
+            def on_progress(i, total, msg="", *a):
+                with organize_lock:
+                    organize_state.update(current=i or 0, total=total or 0, msg=str(msg))
+
+            result = organize_fn(opts, on_progress)
+            with organize_lock:
+                organize_state["result"] = result
+        except Exception as exc:
+            util.log(f"整理执行失败: {exc}", "ERROR")
+            with organize_lock:
+                organize_state["error"] = str(exc)
+        finally:
+            with organize_lock:
+                organize_state["running"] = False
+                organize_state["finished"] = True
 
     def _apply_worker(ids: list) -> None:
         try:
@@ -1583,6 +1657,12 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 self._send(200, json.dumps({"ok": True, **cats_payload()}, ensure_ascii=False)
                            .encode("utf-8"), "application/json")
                 return
+            if parsed.path == "/organize/status":
+                with organize_lock:
+                    payload = {"ok": True, **organize_state}
+                self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                           "application/json")
+                return
             self._send(404, b"not found", "text/plain")
 
         def _serve_play(self, vid: str):
@@ -1695,6 +1775,34 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                                        total=len(ids), error=None, results=[])
                 util.log(f"开始执行删除：{len(ids)} 个文件")
                 threading.Thread(target=_apply_worker, args=(ids,), daemon=True).start()
+                self._send(200, b'{"ok":true}', "application/json")
+                return
+
+            if path == "/organize/apply":
+                if organize_fn is None:
+                    self._send(501, json.dumps({"ok": False, "error": "整理功能不可用（可能未登录）"},
+                                               ensure_ascii=False).encode("utf-8"), "application/json")
+                    return
+                opts = {
+                    "apply": bool(data.get("apply")),
+                    "delete_folders": bool(data.get("delete_folders")),
+                    "clean_junk": bool(data.get("clean_junk")),
+                    "include_other": bool(data.get("include_other")),
+                    "limit": int(data.get("limit") or 0) or None,
+                }
+                if not (opts["apply"] or opts["clean_junk"]):
+                    self._send(400, json.dumps({"ok": False, "error": "请至少勾选“执行移动”或“清理垃圾文件夹”"},
+                                               ensure_ascii=False).encode("utf-8"), "application/json")
+                    return
+                with organize_lock:
+                    if organize_state["running"]:
+                        self._send(409, json.dumps({"ok": False, "error": "已有整理任务在运行"},
+                                                   ensure_ascii=False).encode("utf-8"), "application/json")
+                        return
+                    organize_state.update(running=True, finished=False, current=0, total=0,
+                                          msg="", error=None, result=None)
+                util.log(f"开始整理任务：{opts}")
+                threading.Thread(target=_organize_worker, args=(opts,), daemon=True).start()
                 self._send(200, b'{"ok":true}', "application/json")
                 return
 

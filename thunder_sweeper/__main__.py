@@ -268,16 +268,43 @@ def cmd_review(args, cfg):
             util.log(f"网页执行删除完成：成功 {ok}，失败 {fail}")
             return results
 
-    selections = review_server_serve(videos, args.port, play_url_fn, shots_fn, apply_fn, download_url_fn)
+    organize_fn = None
+    if api is not None:
+        def organize_fn(opts, on_progress):
+            exclude = set(categories.RESERVED)
+            if not opts.get("include_other"):
+                exclude.add("adult_other")
+            move_cats = categories.ids() - exclude
+            plan = organize.load_and_build(cfg, move_cats=move_cats)
+            util.atomic_write_json(util.DATA_DIR / "organize_plan.json", plan)
+            result = {}
+            if opts.get("apply"):
+                def prog(i, total, to_path):
+                    on_progress(i, total, "移动中 → " + str(to_path))
+                result["move"] = organize.apply_plan(
+                    api, plan, limit=opts.get("limit"),
+                    delete_folders=bool(opts.get("delete_folders")),
+                    progress=prog, log=util.log,
+                    chunk=cfg.get("organize_chunk", 8), delay=cfg.get("organize_delay", 1.0))
+                util.atomic_write_json(util.DATA_DIR / "organize_applied.json", result["move"])
+            if opts.get("clean_junk"):
+                on_progress(0, 0, "清理垃圾文件夹…")
+                result["clean"] = organize.clean_junk_folders(api, log=util.log)
+                util.atomic_write_json(util.DATA_DIR / "organize_clean.json", result["clean"])
+            return result
+
+    selections = review_server_serve(videos, args.port, play_url_fn, shots_fn, apply_fn,
+                                     download_url_fn, organize_fn)
     util.log(f"已记录 {len(selections.get('delete', []))} 个待删文件: {util.SELECTIONS_FILE}")
 
 
-def review_server_serve(queue, port, play_url_fn=None, shots_fn=None, apply_fn=None, download_url_fn=None):
+def review_server_serve(queue, port, play_url_fn=None, shots_fn=None, apply_fn=None,
+                        download_url_fn=None, organize_fn=None):
     from . import review_server
 
     return review_server.serve(queue, port=port, open_browser=True,
                                play_url_fn=play_url_fn, shots_fn=shots_fn, apply_fn=apply_fn,
-                               download_url_fn=download_url_fn)
+                               download_url_fn=download_url_fn, organize_fn=organize_fn)
 
 
 def cmd_apply(args, cfg):
