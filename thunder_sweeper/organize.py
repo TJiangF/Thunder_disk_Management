@@ -48,7 +48,7 @@ def is_significant(f: dict, small_mb: float, large_mb: float) -> bool:
 
 def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
                small_mb: float = 20, large_mb: float = 100,
-               move_cats: set | None = None) -> dict:
+               move_cats: set | None = None, fix_inside: bool = False) -> dict:
     cat = {c.get("id"): c.get("category") for c in (classified or [])}
     tree = categories.load_tree()
     paths = {x["id"]: x["path"] for x in categories.flat(tree)}
@@ -85,9 +85,11 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
         if not names:
             continue
         src = f.get("path") or "/"
-        if under_base(src):
-            continue  # already inside the organize tree; don't shuffle it
         target = f"{base}/{'/'.join(names)}"
+        if src == target or src.startswith(target + "/"):
+            continue  # already in the right place
+        if under_base(src) and not fix_inside:
+            continue  # already inside the organize tree; don't shuffle it
         name = f.get("name") or f.get("id")
         stem, ext = _split_ext(name)
         cand, k = name, 2
@@ -159,7 +161,7 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
     }
 
 
-def load_and_build(cfg: dict, move_cats: tuple | None = None) -> dict:
+def load_and_build(cfg: dict, move_cats: tuple | None = None, fix_inside: bool = False) -> dict:
     from . import util
 
     files = util.read_json(util.FILES_FILE) or []
@@ -171,7 +173,7 @@ def load_and_build(cfg: dict, move_cats: tuple | None = None) -> dict:
     small = cfg.get("organize_small_mb", 20)
     large = cfg.get("organize_large_mb", 100)
     plan = build_plan(files, classified, base=base, small_mb=small, large_mb=large,
-                      move_cats=move_cats)
+                      move_cats=move_cats, fix_inside=fix_inside)
     plan["files_source"] = source
     return plan
 

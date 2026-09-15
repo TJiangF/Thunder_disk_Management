@@ -312,15 +312,16 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
             if _kw_hit(label, extra.get(cid)):
                 return cid, f"cat-kw:{cid}"
 
+    # studio-code like (e.g. HEZ-445, CRPD-443) -> treat as JAV, not western
+    if _CODE_RE.search(upper):
+        return "jp", "generic-code"
+
     # fallback: pure-latin multi-word titles -> western
     if not re.search(r"[\u4e00-\u9fff]", name):
         words = re.findall(r"[A-Za-z]{3,}", name)
         if len(words) >= 2:
             return "west", "en-fallback"
 
-    # generic AV pattern (any studio code) -> adult but region unknown
-    if _CODE_RE.search(upper):
-        return "adult_other", "generic-code"
     if any(k in label for k in ("无码", "無碼", "有码", "有碼", "成人", "porn", "sex", "av")):
         return "adult_other", "generic-adult"
 

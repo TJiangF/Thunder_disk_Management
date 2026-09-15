@@ -275,7 +275,8 @@ def cmd_review(args, cfg):
             if not opts.get("include_other"):
                 exclude.add("adult_other")
             move_cats = categories.ids() - exclude
-            plan = organize.load_and_build(cfg, move_cats=move_cats)
+            plan = organize.load_and_build(cfg, move_cats=move_cats,
+                                           fix_inside=bool(opts.get("fix_inside")))
             util.atomic_write_json(util.DATA_DIR / "organize_plan.json", plan)
             result = {}
             if opts.get("apply"):
@@ -487,7 +488,7 @@ def cmd_organize(args, cfg):
     if not getattr(args, "include_other", False):
         exclude.add("adult_other")
     move_cats = categories.ids() - exclude
-    plan = organize.load_and_build(cfg, move_cats=move_cats)
+    plan = organize.load_and_build(cfg, move_cats=move_cats, fix_inside=getattr(args, "fix_inside", False))
     util.atomic_write_json(util.DATA_DIR / "organize_plan.json", plan)
     s = plan["summary"]
     util.log(f"数据来源 {plan['files_source']} · 目标根 {plan['base']}")
@@ -602,6 +603,8 @@ def main(argv=None):
                        help="连“成人-其他”也一起移动（默认只移 日本/欧美/国产）")
     p_org.add_argument("--no-rescan", action="store_true",
                        help="执行后不自动重新扫描+分类（默认会自动做）")
+    p_org.add_argument("--fix-inside", action="store_true",
+                       help="连同纠正“已在 /整理 内但归类不对”的文件（默认不动它们）")
     p_org.add_argument("--yes", action="store_true", help="跳过确认")
 
     p_scan = sub.add_parser("scan", help="递归扫描整个网盘，收集视频并按大小排序")

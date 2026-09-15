@@ -231,6 +231,7 @@ PAGE = r"""<!doctype html>
       <label class="stat"><input type="checkbox" id="org-del"> 删除空的源文件夹</label>
       <label class="stat"><input type="checkbox" id="org-junk"> 清理垃圾文件夹</label>
       <label class="stat"><input type="checkbox" id="org-other"> 含“成人-其他”</label>
+      <label class="stat"><input type="checkbox" id="org-fix"> 纠正 /整理 内错误归类</label>
       <label class="stat"><input type="checkbox" id="org-norescan"> 不自动重扫分类</label>
       <span class="stat">限量</span>
       <input id="org-limit" type="number" min="1" placeholder="全部"
@@ -1236,6 +1237,7 @@ async function runOrganize() {
     delete_folders: document.getElementById('org-del').checked,
     clean_junk: document.getElementById('org-junk').checked,
     include_other: document.getElementById('org-other').checked,
+    fix_inside: document.getElementById('org-fix').checked,
     no_rescan: document.getElementById('org-norescan').checked,
     limit: parseInt(document.getElementById('org-limit').value, 10) || 0,
   };
@@ -1829,6 +1831,7 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     "clean_junk": bool(data.get("clean_junk")),
                     "include_other": bool(data.get("include_other")),
                     "no_rescan": bool(data.get("no_rescan")),
+                    "fix_inside": bool(data.get("fix_inside")),
                     "limit": int(data.get("limit") or 0) or None,
                 }
                 if not (opts["apply"] or opts["clean_junk"]):
