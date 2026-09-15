@@ -233,6 +233,10 @@ class Folders:
         return parent
 
 
+def _is_system_error(msg: str) -> bool:
+    return "file_operate_system_folder" in (msg or "") or "系统默认文件夹" in (msg or "")
+
+
 def _batch_move(api, ids, parent_id, attempts: int = 4, wait: bool = True):
     """Move one chunk; retry on task-limit with backoff; optionally wait for the
     async task to finish so we never pile up tasks. Returns (ok, err)."""
@@ -348,12 +352,15 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
             except Exception as exc:
                 say(f"改名失败 {m['name']} → {m['target_name']}: {exc}", "WARN")
 
-    deleted, delete_failed, kept_now = [], [], []
+    deleted, delete_failed, kept_now, skipped_system = [], [], [], []
     if delete_folders and not limit:
         small_mb = plan["summary"].get("small_mb", 20)
         large_mb = plan["summary"].get("large_mb", 100)
         for d in plan["delete_folders"]:
             folder = d["path"]
+            if folder.rstrip("/").split("/")[-1] in PROTECT_NAMES:
+                skipped_system.append(folder)
+                continue
             fid = folders.id_of(folder, create=False)
             if not fid:
                 continue
@@ -375,8 +382,12 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
                 deleted.append(folder)
                 say(f"已删除文件夹 {folder}")
             except Exception as exc:
-                delete_failed.append({"path": folder, "error": str(exc)})
-                say(f"删除文件夹失败 {folder}: {exc}", "ERROR")
+                if _is_system_error(str(exc)):
+                    skipped_system.append(folder)
+                    say(f"系统文件夹，跳过 {folder}", "WARN")
+                else:
+                    delete_failed.append({"path": folder, "error": str(exc)})
+                    say(f"删除文件夹失败 {folder}: {exc}", "ERROR")
             time.sleep(0.3)
 
     summary = {
@@ -386,6 +397,7 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
         "total_planned": len(plan["moves"]),
         "deleted_folders": deleted,
         "delete_failed": delete_failed,
+        "skipped_system": skipped_system,
         "kept_now": kept_now,
         "limit": limit,
         "delete_folders_flag": delete_folders,
@@ -393,7 +405,7 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
     return {"results": results, "summary": summary}
 
 
-PROTECT_NAMES = {"超级保险箱", "在线解压", "整理"}
+PROTECT_NAMES = {"超级保险箱", "在线解压", "整理", "我的转存"}
 
 
 def clean_junk_folders(api, log=None, protect: set | None = None) -> dict:
@@ -437,6 +449,9 @@ def clean_junk_folders(api, log=None, protect: set | None = None) -> dict:
             say(f"删除垃圾文件夹 {path}")
             return True
         except Exception as exc:
+            if _is_system_error(str(exc)):
+                say(f"系统文件夹，跳过 {path}", "WARN")
+                return False
             failed.append({"path": path, "error": str(exc)})
             say(f"删除失败 {path}: {exc}", "ERROR")
             return False
