@@ -289,7 +289,7 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
     base = plan["base"]
     targets = sorted({m["to"] for m in plan["moves"]})
     target_ids = {}
-    already = set()
+    already = set()  # info only: files currently sitting in a target folder
     for tpath in targets:
         tid = folders.id_of(tpath, create=True)
         target_ids[tpath] = tid
@@ -297,9 +297,9 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
             for e in api.list_folder(tid):
                 if e.get("kind") == "drive#file":
                     already.add(e.get("id"))
-    say(f"目标目录已就绪：{len(targets)} 个；已在目标中的文件 {len(already)} 个（跳过）")
+    say(f"目标目录已就绪：{len(targets)} 个；目标目录内现有文件 {len(already)} 个")
 
-    moves = [m for m in plan["moves"] if m["id"] not in already]
+    moves = plan["moves"]
     if limit:
         moves = moves[:limit]
     total = len(moves)
