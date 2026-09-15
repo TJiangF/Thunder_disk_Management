@@ -43,23 +43,24 @@ def save_tree(tree: list) -> None:
     util.atomic_write_json(util.CATEGORIES_FILE, tree)
 
 
-def _walk(nodes, depth=0, parents=None):
+def _walk(nodes, depth=0, parents=None, parent_id=None):
     parents = parents or []
     for n in nodes:
         if not isinstance(n, dict):
             continue
-        yield n, depth, parents
-        yield from _walk(n.get("children") or [], depth + 1, parents + [n.get("name")])
+        yield n, depth, parents, parent_id
+        yield from _walk(n.get("children") or [], depth + 1, parents + [n.get("name")], n.get("id"))
 
 
 def flat(tree: list | None = None) -> list:
     tree = tree if tree is not None else load_tree()
     out = []
-    for n, depth, parents in _walk(tree):
+    for n, depth, parents, parent_id in _walk(tree):
         out.append({
             "id": n.get("id"),
             "name": n.get("name"),
             "depth": depth,
+            "parent": parent_id,
             "label": ("　" * depth) + (n.get("name") or ""),
             "path": parents + [n.get("name")],
             "children_count": len(n.get("children") or []),

@@ -155,6 +155,18 @@ PAGE = r"""<!doctype html>
   #rule-overrides { background: #0f1115; color: #e6e8eb; border: 1px solid #2a2e35; border-radius: 8px;
                     padding: 8px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
   code { background: #232833; padding: 0 4px; border-radius: 4px; }
+  .filter-drop { position: relative; display: inline-block; }
+  .filter-menu { position: absolute; display: none; top: 100%; left: 0; background: #1b1e24;
+                 border: 1px solid #3a3f47; border-radius: 8px; padding: 4px; z-index: 60;
+                 min-width: 180px; }
+  .fitem { position: relative; padding: 6px 10px; cursor: pointer; display: flex;
+           justify-content: space-between; align-items: center; gap: 12px; white-space: nowrap;
+           border-radius: 6px; }
+  .fitem:hover { background: #2a2e35; }
+  .fitem .submenu { display: none; position: absolute; left: 100%; top: -6px; background: #1b1e24;
+                    border: 1px solid #3a3f47; border-radius: 8px; padding: 4px; min-width: 160px; }
+  .fitem:hover > .submenu { display: block; }
+  .fitem .arrow { color: #9aa4b2; margin-left: 8px; }
   .catsel { background: #0f1115; color: #e6e8eb; border: 1px solid #3a3f47; border-radius: 6px;
             font-size: 11px; padding: 1px 4px; }
 </style>
@@ -179,7 +191,10 @@ PAGE = r"""<!doctype html>
   </div>
   <div class="row" style="margin-top:8px">
     <span class="stat">筛选：</span>
-    <div class="chips" id="chips"></div>
+    <div class="filter-drop">
+      <button id="filter-btn" onclick="toggleFilterMenu(event)">全部分类 ▾</button>
+      <div id="chips" class="filter-menu"></div>
+    </div>
     <span style="flex:1"></span>
     <span class="stat">批量分类：</span>
     <select id="batch-cat" style="background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:4px 8px"></select>
@@ -252,6 +267,7 @@ PAGE = r"""<!doctype html>
       <div style="margin-top:8px"><button class="primary" onclick="saveOverrides()">保存覆盖</button></div>
     </details>
     <div style="margin-top:12px">
+      <button class="primary" onclick="reclassify()">按当前规则重新分类</button>
       <button onclick="resetClassify()">重置全部分类（含手动）</button>
       <span id="rule-msg" class="stat" style="margin-left:8px"></span>
     </div>
@@ -295,7 +311,7 @@ const RULES = __RULES_JSON__;
 const INITIAL_SELECTED = __SELECTED_JSON__;
 
 let CATS = CATEGORIES.map(c => c.id);
-const activeCats = new Set(CATS);
+let filterCat = null;                // null = all
 const selected = new Set();          // file ids
 const selectedFolders = new Set();   // folder paths ("/a/b")
 const byId = Object.fromEntries(VIDEOS.map(v => [v.id, v]));
@@ -318,7 +334,9 @@ function fmtDur(s) {
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function catOf(v){ return v.category || 'unknown'; }
-function visible(v){ return activeCats.has(catOf(v)); }
+function catParent(id) { const n = CATEGORIES.find(c => c.id === id); return n ? n.parent : null; }
+function isDescOrSelf(cat, target) { let x = cat; while (x) { if (x === target) return true; x = catParent(x); } return false; }
+function visible(v){ return !filterCat || isDescOrSelf(catOf(v), filterCat); }
 function catSelect(v){
   const auto = v.auto_category || catOf(v);
   const cur = v.manual ? catOf(v) : '';
@@ -629,10 +647,7 @@ function applyCats(data) {
   COLORS = data.colors || COLORS;
   CAT_DEFAULTS = data.defaults || CAT_DEFAULTS;
   CATS = CATEGORIES.map(c => c.id);
-  const valid = new Set(CATS);
-  for (const c of [...activeCats]) if (!valid.has(c)) activeCats.delete(c);
-  for (const c of CATS) activeCats.add(c);
-  populateBatchSelect();
+  if (filterCat && !CATS.includes(filterCat)) filterCat = null;
   renderChips();
   renderCatsEditor();
   renderStat();
@@ -785,6 +800,21 @@ async function applyBatchCategory() {
     toast('已把 ' + ids.length + ' 个文件分类为「' + label + '」');
   } catch (e) { alert('批量分类失败：' + e); }
 }
+async function reclassify() {
+  const msg = document.getElementById('rule-msg');
+  if (msg) msg.textContent = '重新分类中…';
+  try {
+    const r = await fetch('/reclassify', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '失败');
+    applyItems(j.items);
+    renderChips(); renderStat();
+    if (tab === 'files') renderFiles();
+    if (tab === 'review') renderReview();
+    if (tab === 'dedupe') renderDedupe();
+    if (msg) msg.textContent = '已按当前规则重新分类 ✓';
+  } catch (e) { if (msg) msg.textContent = '失败：' + e; }
+}
 async function resetClassify() {
   if (!confirm('重置全部自动+手动分类结果？\n（会清空自定义规则和所有手动分类）')) return;
   const msg = document.getElementById('rule-msg');
@@ -802,21 +832,49 @@ async function resetClassify() {
   } catch (e) { msg.textContent = '失败：' + e; }
 }
 
-function renderChips() {
-  const counts = {};
-  for (const c of CATS) counts[c] = 0;
-  for (const v of VIDEOS) counts[catOf(v)] = (counts[catOf(v)]||0) + 1;
-  const box = document.getElementById('chips');
-  box.innerHTML = CATEGORIES.map(c => {
-    const path = (c.path || [c.name]).join(' / ');
-    const ind = c.depth ? '<span style="opacity:.5;margin:0 2px 0 4px">└</span>' : '';
-    return '<span class="chip ' + (activeCats.has(c.id)?'':'off') + '"' +
-      ' style="margin-left:' + (c.depth * 10) + 'px" title="' + esc(path) + '"' +
-      ' onclick="toggleCat(\'' + c.id + '\')">' +
-      '<span class="dot" style="background:' + (COLORS[c.id]||'#888') + '"></span>' +
-      ind + esc(c.name) + ' ' + (counts[c.id]||0) + '</span>';
-  }).join('');
+function catTree() {
+  const root = [], stack = [];
+  for (const c of CATEGORIES) {
+    const node = { id: c.id, name: c.name, depth: c.depth, children: [] };
+    while (stack.length && stack[stack.length - 1].depth >= c.depth) stack.pop();
+    if (stack.length) stack[stack.length - 1].children.push(node);
+    else root.push(node);
+    stack.push(node);
+  }
+  return root;
 }
+function _fnode(n, cnt) {
+  const has = n.children && n.children.length;
+  const arrow = has ? '<span class="arrow">›</span>' : '';
+  const sub = has ? '<div class="submenu">' + n.children.map(c => _fnode(c, cnt)).join('') + '</div>' : '';
+  const dot = '<span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + (COLORS[n.id]||'#888') + ';margin-right:6px"></span>';
+  return '<div class="fitem" onclick="setFilter(\'' + n.id + '\'); event.stopPropagation();">' +
+    '<span>' + dot + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (cnt[n.id]||0) + '</span></span>' +
+    arrow + sub + '</div>';
+}
+function renderChips() {
+  const box = document.getElementById('chips');
+  if (!box) return;
+  const cnt = {};
+  for (const v of VIDEOS) cnt[catOf(v)] = (cnt[catOf(v)]||0) + 1;
+  const tree = catTree();
+  box.innerHTML =
+    '<div class="fitem" onclick="setFilter(null); event.stopPropagation();"><span>全部分类</span></div>' +
+    tree.map(n => _fnode(n, cnt)).join('');
+  const btn = document.getElementById('filter-btn');
+  if (btn) {
+    const node = filterCat && CATEGORIES.find(c => c.id === filterCat);
+    btn.textContent = (node ? (node.path || [node.name]).join(' / ') : '全部分类') + ' ▾';
+  }
+}
+function toggleFilterMenu(ev) {
+  if (ev) ev.stopPropagation();
+  const m = document.getElementById('chips');
+  if (m) m.style.display = (m.style.display === 'block') ? 'none' : 'block';
+}
+function closeFilterMenu() { const m = document.getElementById('chips'); if (m) m.style.display = 'none'; }
+function setFilter(id) { filterCat = id; render(); closeFilterMenu(); }
+document.addEventListener('click', closeFilterMenu);
 function populateBatchSelect() {
   const sel = document.getElementById('batch-cat');
   if (!sel) return;
@@ -824,7 +882,6 @@ function populateBatchSelect() {
     CATEGORIES.map(c => '<option value="' + c.id + '">' +
       esc((c.path || [c.name]).join(' / ')) + '</option>').join('');
 }
-function toggleCat(c) { activeCats.has(c) ? activeCats.delete(c) : activeCats.add(c); render(); }
 function renderStat() {
   let n = 0, total = 0;
   for (const v of VIDEOS) if (visible(v)) { n++; total += v.size||0; }
@@ -1798,6 +1855,27 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 util.log(f"已重置全部分类（含手动），重新分类 {len(items)} 项")
                 self._send(200, json.dumps({"ok": True, "items": items},
                                            ensure_ascii=False).encode("utf-8"), "application/json")
+                return
+
+            if path == "/reclassify":
+                try:
+                    classified = classify.categorize_files(dataset)
+                    util.atomic_write_json(util.CLASSIFIED_FILE, classified)
+                    items = {c["id"]: {"category": c["category"],
+                                       "auto_category": c.get("auto_category", c["category"]),
+                                       "manual": bool(c.get("manual"))} for c in classified}
+                    for v in dataset:
+                        rec = items.get(v["id"])
+                        if rec:
+                            v.update(category=rec["category"], auto_category=rec["auto_category"],
+                                     manual=rec["manual"])
+                    util.log(f"已按当前规则重新分类 {len(items)} 项")
+                    self._send(200, json.dumps({"ok": True, "items": items},
+                                               ensure_ascii=False).encode("utf-8"), "application/json")
+                except Exception as exc:
+                    util.log(f"重新分类失败: {exc}", "ERROR")
+                    self._send(500, json.dumps({"ok": False, "error": str(exc)},
+                                               ensure_ascii=False).encode("utf-8"), "application/json")
                 return
 
             if path == "/rules":
