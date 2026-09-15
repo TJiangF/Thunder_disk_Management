@@ -418,6 +418,77 @@ def test_captcha_provider(r: Results) -> None:
             ct.requests.post = saved
 
 
+def test_scan_walk(r: Results) -> None:
+    r.section("scan（递归遍历 / 断点续扫，模拟 API）")
+
+    class FakeAPI:
+        cfg = {"api_delay": 0}
+
+        def __init__(self, tree):
+            self.tree = tree
+
+        def list_folder(self, parent_id):
+            return self.tree.get(parent_id, [])
+
+    def vid(i, name):
+        return {"id": i, "name": name, "kind": "drive#file", "mime_type": "video/mp4",
+                "size": 100, "video": {"duration": 10}}
+
+    tree = {
+        "": [{"id": "f1", "name": "F1", "kind": "drive#folder"},
+             vid("v1", "A.mp4"),
+             {"id": "d1", "name": "notes.txt", "kind": "drive#file", "size": 5}],
+        "f1": [{"id": "f2", "name": "F2", "kind": "drive#folder"},
+               vid("v2", "B.mp4")],
+        "f2": [vid("v3", "C.mp4")],
+    }
+    state = thunder_api.ThunderAPI.walk(FakeAPI(tree), state={})
+    r.eq("扫描到的视频数", len(state["videos"]), 3)
+    r.eq("扫描到的全部条目数(含文件夹)", len(state["files"]), 6)
+    r.eq("访问的目录数", state["dirs"], 3)
+    r.check("视频带上路径", {v["name"]: v["path"] for v in state["videos"]}["C.mp4"] == "/F1/F2")
+
+    half = {"videos": [{"id": "v9", "name": "Z.mp4", "path": "/", "size": 1}],
+            "files": [], "visited": ["f2"], "frontier": [["f1", "/F1"]], "dirs": 1}
+    resumed = thunder_api.ThunderAPI.walk(FakeAPI(tree), state=half)
+    r.check("续扫保留已有结果", any(v["id"] == "v9" for v in resumed["videos"]))
+    r.check("续扫继续收集", any(v["id"] == "v2" for v in resumed["videos"]))
+
+
+def test_ffmpeg_pipeline(r: Results) -> None:
+    r.section("截图管线（用内置 ffmpeg 真实生成并截帧）")
+    import subprocess
+    import tempfile
+
+    with isolated_home():
+        exe = screenshots._ffmpeg_exe()
+        if not exe:
+            r.check("ffmpeg 可用", False, "未找到 ffmpeg")
+            return
+        tmp = tempfile.mkdtemp(prefix="sweeper-media-")
+        try:
+            src = os.path.join(tmp, "test.mp4")
+            gen = subprocess.run(
+                [exe, "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
+                 "-t", "3", "-pix_fmt", "yuv420p", src],
+                capture_output=True, text=True)
+            ok = gen.returncode == 0 and os.path.exists(src) and os.path.getsize(src) > 0
+            r.check("生成测试视频", ok, gen.stderr[-200:] if not ok else "")
+            if not ok:
+                return
+            cfg = util.load_config()
+            out = util.THUMB_DIR / "vt" / "1.jpg"
+            status = screenshots.grab(src, 1.0, out, cfg)
+            r.eq("截取指定时间点", status, "ok")
+            r.check("输出非空 jpg", out.exists() and out.stat().st_size > 0)
+            meta = screenshots.probe(src, cfg)
+            r.check("探测到时长", bool(meta.get("duration")), f"meta={meta}")
+            r.check("探测到分辨率", meta.get("width") == 320 and meta.get("height") == 240, f"meta={meta}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_screenshots(r: Results) -> None:
     r.section("screenshots（截图辅助）")
     with isolated_home():
@@ -500,6 +571,161 @@ def test_review_server(r: Results) -> None:
         _http("POST", base + "/submit", {"delete": [], "replace": True})
 
 
+def test_review_http_edge(r: Results) -> None:
+    r.section("review_server（异常输入 / 注入防护）")
+    with isolated_home():
+        from . import review_server
+
+        evil = {"id": "E1", "name": "</script><img src=x onerror=alert(1)>.mp4",
+                "path": "/下载", "size": 1, "category": "jp", "auto_category": "jp",
+                "manual": False, "thumbs": []}
+        videos = [evil]
+        util.atomic_write_json(util.VIDEOS_FILE, videos)
+        util.atomic_write_json(util.FILES_FILE, videos)
+        port = _free_port()
+        threading.Thread(target=review_server.serve,
+                         kwargs={"videos": videos, "port": port, "open_browser": False},
+                         daemon=True).start()
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(60):
+            try:
+                _http("GET", base + "/")
+                break
+            except Exception:
+                time.sleep(0.2)
+        _, page = _http("GET", base + "/")
+        body = page.decode("utf-8", "ignore")
+        r.check("恶意文件名不会闭合 script", "</script><img" not in body)
+        r.check("已转义为 \\u003c", "\\u003c" in body)
+
+        try:
+            _http("POST", base + "/manual", {"id": "NOPE", "category": "jp"})
+            r.check("未知 id 返回 404", False)
+        except urllib.error.HTTPError as exc:
+            r.eq("未知 id 返回 404", exc.code, 404)
+
+        status, _ = _http("POST", base + "/manual", {"id": "E1", "category": "jp",
+                                                     "extra": "ignored"})
+        r.eq("多余字段被忽略", status, 200)
+
+        try:
+            status, j = _http("POST", base + "/organize/apply", {"apply": False})
+        except urllib.error.HTTPError as exc:
+            status, j = exc.code, {}
+        r.check("未勾选任何操作时给出提示", status in (400, 501) or j.get("ok") is False)
+
+        status, j = _http("GET", base + "/apply/status")
+        r.check("/apply/status 可用", status == 200 and "running" in j)
+
+        try:
+            _http("GET", base + "/definitely/missing")
+            r.check("未知路径 404", False)
+        except urllib.error.HTTPError as exc:
+            r.eq("未知路径 404", exc.code, 404)
+
+        status, _ = _http("POST", base + "/categories/delete", {"id": "unknown"})
+        r.check("删除保留分类安全处理", status in (200, 400))
+
+
+def test_request_retry(r: Results) -> None:
+    r.section("thunder_api（401 / captcha 失效自动重试）")
+    from . import thunder_api as ta
+
+    class Resp:
+        def __init__(self, status, text="{}"):
+            self.status_code = status
+            self.text = text
+
+        def json(self):
+            return json.loads(self.text)
+
+    class FakeSession:
+        def __init__(self, script):
+            self.script = list(script)
+            self.calls = 0
+
+        def request(self, *a, **k):
+            self.calls += 1
+            return self.script.pop(0)
+
+    class FakeProvider:
+        def __init__(self):
+            self.refreshed = 0
+            self.invalidated = []
+
+        def headers(self, action=None):
+            return {"x-captcha-token": "t"}
+
+        def force_refresh(self):
+            self.refreshed += 1
+
+        def invalidate_captcha(self, action=None):
+            self.invalidated.append(action)
+
+    cfg = dict(util.DEFAULT_CONFIG)
+    cfg["api_retries"] = 3
+    cfg["api_delay"] = 0
+
+    api = ta.ThunderAPI(FakeProvider(), cfg)
+    api.session = FakeSession([Resp(401, '{"error":"unauthenticated"}'), Resp(200, '{"files":[]}')])
+    try:
+        out = api.list_folder("")
+        r.eq("401 后刷新并重试成功", (api.provider.refreshed, out), (1, []))
+    except Exception as exc:
+        r.check("401 后刷新并重试成功", False, str(exc))
+
+    api = ta.ThunderAPI(FakeProvider(), cfg)
+    api.session = FakeSession([Resp(400, '{"error":"captcha_invalid"}'), Resp(200, '{"files":[]}')])
+    try:
+        api.list_folder("")
+        r.check("captcha_invalid 后重新申请重试",
+                api.provider.invalidated == ["get:/drive/v1/files"], str(api.provider.invalidated))
+    except Exception as exc:
+        r.check("captcha_invalid 后重新申请重试", False, str(exc))
+
+    api = ta.ThunderAPI(FakeProvider(), cfg)
+    api.session = FakeSession([Resp(403, '{"error":"forbidden"}')])
+    try:
+        api.list_folder("")
+        r.check("其它错误直接抛出", False)
+    except RuntimeError as exc:
+        r.check("其它错误直接抛出", "403" in str(exc))
+
+
+def test_cli(r: Results) -> None:
+    r.section("CLI（打包/源码两种运行方式）")
+    import subprocess
+
+    if getattr(sys, "frozen", False):
+        cmd_prefix = [sys.executable]
+    else:
+        cmd_prefix = [sys.executable, "-m", "thunder_sweeper"]
+    tmp = tempfile.mkdtemp(prefix="sweeper-cli-")
+    env = dict(os.environ, THUNDER_SWEEPER_HOME=tmp)
+    try:
+        out = subprocess.run(cmd_prefix + ["--version"], capture_output=True, text=True, env=env)
+        r.eq("--version 退出码", out.returncode, 0)
+        r.check("--version 输出程序名", "ThunderSweeper" in (out.stdout + out.stderr))
+
+        out = subprocess.run(cmd_prefix + ["-h"], capture_output=True, text=True, env=env)
+        r.eq("-h 退出码", out.returncode, 0)
+        for cmd in ("login", "scan", "classify", "organize", "review", "selftest"):
+            r.check(f"帮助含子命令 {cmd}", cmd in out.stdout)
+
+        out = subprocess.run(cmd_prefix + ["no_such_command"], capture_output=True, text=True, env=env)
+        r.check("未知子命令非零退出", out.returncode != 0)
+
+        out = subprocess.run(cmd_prefix + ["status"], capture_output=True, text=True, env=env)
+        r.eq("status 空数据可运行", out.returncode, 0)
+
+        out = subprocess.run(cmd_prefix + ["organize"], capture_output=True, text=True, env=env)
+        r.check("无扫描数据时也能预览（不崩溃）",
+                out.returncode == 0 and "移动" in (out.stdout + out.stderr),
+                f"rc={out.returncode} out={(out.stdout + out.stderr)[:150]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_live(r: Results) -> None:
     r.section("live（真实迅雷 API 沙箱：只动自建测试文件夹）")
     from . import chrome_tokens
@@ -565,8 +791,10 @@ def run(live: bool = False) -> int:
     for name, fn in (
         ("util", test_util), ("categories", test_categories), ("classify", test_classify),
         ("organize", test_organize), ("dedupe", test_dedupe), ("thunder_api", test_thunder_api),
-        ("captcha", test_captcha_provider), ("screenshots", test_screenshots),
-        ("review_server", test_review_server),
+        ("captcha", test_captcha_provider), ("scan_walk", test_scan_walk),
+        ("ffmpeg", test_ffmpeg_pipeline), ("screenshots", test_screenshots),
+        ("review_server", test_review_server), ("review_http_edge", test_review_http_edge),
+        ("request_retry", test_request_retry), ("cli", test_cli),
     ):
         r.run(name, lambda fn=fn: fn(r))
     if live:

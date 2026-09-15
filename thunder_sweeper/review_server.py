@@ -1508,16 +1508,23 @@ def build_html(videos: list[dict], resume_index: int = -1,
         "manual": bool(v.get("manual")),
         "thumbs": v.get("thumbs") or [],
     } for v in videos]
-    html = PAGE.replace("__VIDEOS_JSON__", json.dumps(slim, ensure_ascii=False))
+    html = PAGE.replace("__VIDEOS_JSON__", _embed(slim))
     payload = cats_payload()
-    html = html.replace("__LABELS_JSON__", json.dumps(payload["labels"], ensure_ascii=False))
-    html = html.replace("__COLORS_JSON__", json.dumps(payload["colors"], ensure_ascii=False))
-    html = html.replace("__CATEGORIES_JSON__", json.dumps(payload["categories"], ensure_ascii=False))
-    html = html.replace("__CAT_DEFAULTS_JSON__", json.dumps(payload["defaults"], ensure_ascii=False))
-    html = html.replace("__RULES_JSON__", json.dumps(classify.load_user_rules(), ensure_ascii=False))
-    html = html.replace("__SELECTED_JSON__", json.dumps(selected_ids or [], ensure_ascii=False))
-    html = html.replace("__RESUME_ID__", json.dumps(resume_id or ""))
+    html = html.replace("__LABELS_JSON__", _embed(payload["labels"]))
+    html = html.replace("__COLORS_JSON__", _embed(payload["colors"]))
+    html = html.replace("__CATEGORIES_JSON__", _embed(payload["categories"]))
+    html = html.replace("__CAT_DEFAULTS_JSON__", _embed(payload["defaults"]))
+    html = html.replace("__RULES_JSON__", _embed(classify.load_user_rules()))
+    html = html.replace("__SELECTED_JSON__", _embed(selected_ids or []))
+    html = html.replace("__RESUME_ID__", _embed(resume_id or ""))
     return html.replace("__RESUME_INDEX__", str(resume_index))
+
+
+def _embed(obj) -> str:
+    """JSON for inlining inside <script>: neutralise ``</script>`` and friends."""
+    text = json.dumps(obj, ensure_ascii=False)
+    return (text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
 def _resume_index(videos: list[dict]) -> int:
@@ -1814,7 +1821,10 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
 
         def do_POST(self):
             path = urlparse(self.path).path
-            length = int(self.headers.get("Content-Length", 0))
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                length = 0
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 data = json.loads(raw or b"{}")
