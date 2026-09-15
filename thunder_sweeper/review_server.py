@@ -230,7 +230,7 @@ PAGE = r"""<!doctype html>
       <span class="stat">执行内容（默认执行移动，完成后自动重扫+分类）：</span>
       <label class="stat"><input type="checkbox" id="org-del"> 删除空白文件夹</label>
       <label class="stat"><input type="checkbox" id="org-junk"> 清理垃圾文件夹</label>
-      <label class="stat"><input type="checkbox" id="org-fix"> 纠正 /整理 内错误归类</label>
+      <label class="stat"><input type="checkbox" id="org-fix" onchange="loadOrganize(true)"> 纠正 /整理 内错误归类</label>
       <button class="danger" onclick="runOrganize()">执行</button>
     </div>
     <div class="row" style="margin-bottom:10px">
@@ -591,8 +591,10 @@ let ORGANIZE = null;
 async function loadOrganize(force) {
   const box = document.getElementById('organize-body');
   box.innerHTML = '<p class="stat">生成方案中…</p>';
+  const fx = document.getElementById('org-fix');
+  const q = (force ? '?force=1' : '?') + (fx && fx.checked ? '&fix_inside=1' : '');
   try {
-    const r = await fetch('/organize' + (force ? '?force=1' : ''));
+    const r = await fetch('/organize' + q);
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || '失败');
     ORGANIZE = j.plan;
@@ -1690,7 +1692,10 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 return
             if parsed.path == "/organize":
                 try:
-                    plan = organize.load_and_build(util.load_config())
+                    fix = "fix_inside=1" in (parsed.query or "")
+                    move_cats = categories.ids() - set(categories.RESERVED) - {"adult_other"}
+                    plan = organize.load_and_build(util.load_config(), move_cats=move_cats,
+                                                   fix_inside=fix)
                     payload = {"ok": True, "plan": plan}
                 except Exception as exc:
                     util.log(f"生成整理方案失败: {exc}", "ERROR")
