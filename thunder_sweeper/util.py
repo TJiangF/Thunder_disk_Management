@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -108,8 +109,35 @@ def read_json(path: Path, default=None):
         return default
 
 
+BACKUP_DIR = DATA_DIR / "backups"
+_BACKUP_NAMES = {
+    "categories.json", "classify_rules.json", "manual_categories.json",
+    "selections.json", "review_progress.json", "config.json",
+}
+
+
+def backup_file(path: Path, keep: int = 20) -> None:
+    """Keep timestamped copies of small user-authored config/data files."""
+    if not path.exists():
+        return
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dst = BACKUP_DIR / f"{path.name}.{ts}.bak"
+        shutil.copy2(path, dst)
+        for old in sorted(BACKUP_DIR.glob(path.name + ".*.bak"))[:-keep]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def atomic_write_json(path: Path, obj) -> None:
     ensure_dirs()
+    if path.name in _BACKUP_NAMES:
+        backup_file(path)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
