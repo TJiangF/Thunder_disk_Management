@@ -381,9 +381,11 @@ async function setManual(id, value) {
     if (!j.ok) throw new Error(j.error || '失败');
     const v = byId[id];
     if (v) { v.category = j.category; v.manual = j.manual; if (j.auto_category) v.auto_category = j.auto_category; }
+    ORGANIZE = null;
     renderChips(); renderStat();
     if (tab === 'files') renderFiles();
     if (tab === 'review') renderReview();
+    toast('已分类，切到「整理」页可同步整理');
   } catch (e) { alert('设置分类失败：' + e); }
 }
 
@@ -825,6 +827,7 @@ async function applyBatchCategory() {
     applyItems(j.items);
     selected.clear();
     selectedFolders.clear();
+    ORGANIZE = null;
     renderStat(); renderChips();
     if (tab === 'files') renderFiles();
     if (tab === 'review') renderReview();
@@ -840,6 +843,7 @@ async function reclassify() {
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || '失败');
     applyItems(j.items);
+    ORGANIZE = null;
     renderChips(); renderStat();
     if (tab === 'files') renderFiles();
     if (tab === 'review') renderReview();
@@ -857,6 +861,7 @@ async function resetClassify() {
     if (!j.ok) throw new Error(j.error || '失败');
     applyItems(j.items);
     RULES.extra = {}; RULES.overrides = [];
+    ORGANIZE = null;
     renderRules(); renderChips(); renderStat();
     if (tab === 'files') renderFiles();
     if (tab === 'review') renderReview();
@@ -1926,18 +1931,25 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 else:
                     manual.pop(fid, None)
                 classify.save_manual(manual)
-                if fid in manual:
-                    item["category"] = manual[fid]
-                    item["manual"] = True
-                else:
-                    auto, _ = classify.classify(item.get("name") or "", item.get("path") or "")
-                    item["category"] = auto
-                    item["auto_category"] = auto
-                    item["manual"] = False
-                util.log(f"手动分类: {item.get('name')} -> {categories.labels().get(item['category'], item['category'])}")
-                self._send(200, json.dumps({"ok": True, "id": fid, "category": item["category"],
-                                            "auto_category": item.get("auto_category", item["category"]),
-                                            "manual": item["manual"]}, ensure_ascii=False).encode("utf-8"),
+                vids = util.read_json(util.VIDEOS_FILE) or dataset
+                classified = classify.categorize_files(vids, None, manual)
+                util.atomic_write_json(util.CLASSIFIED_FILE, classified)
+                items = {c["id"]: {"category": c["category"],
+                                   "auto_category": c.get("auto_category", c["category"]),
+                                   "manual": bool(c.get("manual"))} for c in classified}
+                for v in dataset:
+                    rec = items.get(v["id"])
+                    if rec:
+                        v.update(category=rec["category"], auto_category=rec["auto_category"],
+                                 manual=rec["manual"])
+                rec = items.get(fid, {})
+                util.log(f"手动分类: {item.get('name')} -> "
+                         f"{categories.labels().get(item['category'], item['category'])}（整理页可按最新分类同步）")
+                self._send(200, json.dumps({"ok": True, "id": fid,
+                                            "category": rec.get("category", item.get("category")),
+                                            "auto_category": rec.get("auto_category", item.get("category")),
+                                            "manual": rec.get("manual", fid in manual)},
+                                           ensure_ascii=False).encode("utf-8"),
                            "application/json")
                 return
 
