@@ -8,5 +8,11 @@ config.json
 __pycache__/
 *.py[cod]
 
+# build artifacts
+build/
+dist/
+*.spec.bak
+packaging/icon.iconset/
+
 # misc
 .DS_Store
