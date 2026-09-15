@@ -280,7 +280,7 @@ def cmd_review(args, cfg):
             result = {}
             if opts.get("apply"):
                 def prog(i, total, to_path):
-                    on_progress(i, total, "移动中 → " + str(to_path))
+                    on_progress("移动", i, total, "→ " + str(to_path))
                 result["move"] = organize.apply_plan(
                     api, plan, limit=opts.get("limit"),
                     delete_folders=bool(opts.get("delete_folders")),
@@ -288,9 +288,11 @@ def cmd_review(args, cfg):
                     chunk=cfg.get("organize_chunk", 8), delay=cfg.get("organize_delay", 1.0))
                 util.atomic_write_json(util.DATA_DIR / "organize_applied.json", result["move"])
             if opts.get("clean_junk"):
-                on_progress(0, 0, "清理垃圾文件夹…")
+                on_progress("清理", 0, 0, "清理垃圾文件夹…")
                 result["clean"] = organize.clean_junk_folders(api, log=util.log)
                 util.atomic_write_json(util.DATA_DIR / "organize_clean.json", result["clean"])
+            if not opts.get("no_rescan"):
+                _auto_rescan_classify(cfg, api, progress=on_progress)
             return result
 
     selections = review_server_serve(videos, args.port, play_url_fn, shots_fn, apply_fn,
@@ -457,6 +459,29 @@ def cmd_dedupe(args, cfg):
     util.log("结果: data/duplicates.json；网页“重复去重”里可勾选删除")
 
 
+def _auto_rescan_classify(cfg, api, progress=None):
+    """Full re-scan + re-classify (used after organize apply/clean)."""
+    def scan_prog(n_videos, n_dirs, path):
+        if progress:
+            progress("扫描", n_dirs, 0, f"已扫描 {n_dirs} 个目录 / {n_videos} 个视频")
+
+    state = api.walk(state={}, on_progress=scan_prog)
+    videos = sorted(state.get("videos", []), key=lambda v: v.get("size", 0), reverse=True)
+    files = state.get("files", [])
+    util.atomic_write_json(util.VIDEOS_FILE, videos)
+    util.atomic_write_json(util.FILES_FILE, files)
+    util.atomic_write_json(util.SCAN_STATE_FILE, state)
+
+    if progress:
+        progress("分类", 0, 1, "重新分类…")
+    classified = classify.categorize_files(files)
+    util.atomic_write_json(util.CLASSIFIED_FILE, classified)
+    if progress:
+        progress("分类", 1, 1, "分类完成")
+    util.log(f"已重新扫描并分类：{len(videos)} 个视频 / {len(files)} 个文件")
+    return files, videos
+
+
 def cmd_organize(args, cfg):
     exclude = set(categories.RESERVED)
     if not getattr(args, "include_other", False):
@@ -518,6 +543,10 @@ def cmd_organize(args, cfg):
         util.log(f"清理完成：删除文件夹 {len(res['deleted'])} 个，失败 {len(res['failed'])}")
         util.log("明细: data/organize_clean.json")
 
+    if (args.apply or args.clean_junk) and not getattr(args, "no_rescan", False):
+        util.log("开始自动重新扫描并分类…")
+        _auto_rescan_classify(cfg, api, progress=lambda ph, c, t, m: util.log(f"[{ph}] {m}"))
+
 
 def cmd_status(args, cfg):
     videos = util.read_json(util.VIDEOS_FILE) or []
@@ -571,6 +600,8 @@ def main(argv=None):
                        help="递归删除只含垃圾文件（apk/html/txt/图片/种子…）或为空的文件夹")
     p_org.add_argument("--include-other", action="store_true",
                        help="连“成人-其他”也一起移动（默认只移 日本/欧美/国产）")
+    p_org.add_argument("--no-rescan", action="store_true",
+                       help="执行后不自动重新扫描+分类（默认会自动做）")
     p_org.add_argument("--yes", action="store_true", help="跳过确认")
 
     p_scan = sub.add_parser("scan", help="递归扫描整个网盘，收集视频并按大小排序")

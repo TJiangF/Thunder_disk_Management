@@ -169,6 +169,11 @@ PAGE = r"""<!doctype html>
                     border: 1px solid #3a3f47; border-radius: 8px; padding: 4px; min-width: 160px; }
   .fitem:hover > .submenu { display: block; }
   .fitem .arrow { color: #9aa4b2; margin-left: 8px; }
+  .progress { flex: 1; min-width: 200px; height: 8px; background: #232833; border-radius: 6px;
+              overflow: hidden; }
+  .progress-fill { height: 100%; width: 0; background: #2f6fed; transition: width .3s; }
+  .progress-fill.indet { width: 35%; animation: pslide 1.2s linear infinite; }
+  @keyframes pslide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
   .catsel { background: #0f1115; color: #e6e8eb; border: 1px solid #3a3f47; border-radius: 6px;
             font-size: 11px; padding: 1px 4px; }
 </style>
@@ -226,10 +231,14 @@ PAGE = r"""<!doctype html>
       <label class="stat"><input type="checkbox" id="org-del"> 删除空的源文件夹</label>
       <label class="stat"><input type="checkbox" id="org-junk"> 清理垃圾文件夹</label>
       <label class="stat"><input type="checkbox" id="org-other"> 含“成人-其他”</label>
+      <label class="stat"><input type="checkbox" id="org-norescan"> 不自动重扫分类</label>
       <span class="stat">限量</span>
       <input id="org-limit" type="number" min="1" placeholder="全部"
              style="width:80px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:4px 8px">
       <button class="danger" onclick="runOrganize()">执行</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="progress"><div id="org-fill" class="progress-fill"></div></div>
       <span id="org-msg" class="stat"></span>
     </div>
     <div id="organize-body"><p class="stat">加载中…</p></div>
@@ -1215,6 +1224,7 @@ async function runOrganize() {
     delete_folders: document.getElementById('org-del').checked,
     clean_junk: document.getElementById('org-junk').checked,
     include_other: document.getElementById('org-other').checked,
+    no_rescan: document.getElementById('org-norescan').checked,
     limit: parseInt(document.getElementById('org-limit').value, 10) || 0,
   };
   if (!opts.apply && !opts.clean_junk) { alert('请至少勾选“执行移动”或“清理垃圾文件夹”'); return; }
@@ -1222,8 +1232,11 @@ async function runOrganize() {
   if (opts.apply) what.push('执行移动' + (opts.limit ? ('（前 ' + opts.limit + ' 个）') : '') + (opts.delete_folders ? ' + 删除空的源文件夹' : ''));
   if (opts.clean_junk) what.push('清理垃圾文件夹');
   if (opts.include_other) what.push('含成人-其他');
+  what.push(opts.no_rescan ? '不自动重扫' : '完成后自动重扫+分类');
   if (!confirm('确认：' + what.join('；') + '？\n（删除均为移入回收站，可恢复）')) return;
   const msg = document.getElementById('org-msg');
+  const fill = document.getElementById('org-fill');
+  if (fill) { fill.style.width = '0'; fill.style.background = '#2f6fed'; fill.classList.add('indet'); }
   try {
     const r = await fetch('/organize/apply', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(opts)});
@@ -1236,15 +1249,23 @@ async function runOrganize() {
 function pollOrganize() {
   fetch('/organize/status').then(r => r.json()).then(s => {
     const msg = document.getElementById('org-msg');
+    const fill = document.getElementById('org-fill');
     if (s.running) {
-      msg.textContent = (s.msg || '处理中…') + (s.total ? (' ' + s.current + '/' + s.total) : '');
+      const ph = s.phase ? ('[' + s.phase + '] ') : '';
+      msg.textContent = ph + (s.msg || '处理中…') + (s.total ? (' ' + s.current + '/' + s.total) : '');
+      if (fill) {
+        if (s.total > 0) { fill.classList.remove('indet'); fill.style.width = Math.min(100, Math.round(s.current / s.total * 100)) + '%'; }
+        else { fill.classList.add('indet'); }
+      }
       setTimeout(pollOrganize, 1000);
     } else if (s.error) {
+      if (fill) { fill.classList.remove('indet'); fill.style.background = '#c0392b'; fill.style.width = '100%'; }
       msg.textContent = '出错：' + s.error;
     } else if (s.finished) {
-      msg.textContent = '完成';
-      toast('整理任务完成，正在刷新方案…');
-      loadOrganize(true);
+      if (fill) { fill.classList.remove('indet'); fill.style.background = '#2f9e44'; fill.style.width = '100%'; }
+      msg.textContent = '全部完成，正在刷新…';
+      toast('整理 + 重扫 + 分类完成');
+      setTimeout(() => location.reload(), 1500);
     }
   }).catch(() => setTimeout(pollOrganize, 1500));
 }
@@ -1521,16 +1542,17 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     apply_state = {"running": False, "finished": False, "current": 0, "total": 0,
                    "error": None, "results": []}
     apply_lock = threading.Lock()
-    organize_state = {"running": False, "finished": False, "current": 0, "total": 0,
-                      "msg": "", "error": None, "result": None}
+    organize_state = {"running": False, "finished": False, "phase": "", "current": 0,
+                      "total": 0, "msg": "", "error": None, "result": None}
     organize_lock = threading.Lock()
     dedupe_cache: dict = {"groups": None}
 
     def _organize_worker(opts: dict) -> None:
         try:
-            def on_progress(i, total, msg="", *a):
+            def on_progress(phase, current=0, total=0, msg=""):
                 with organize_lock:
-                    organize_state.update(current=i or 0, total=total or 0, msg=str(msg))
+                    organize_state.update(phase=str(phase or ""), current=int(current or 0),
+                                          total=int(total or 0), msg=str(msg or ""))
 
             result = organize_fn(opts, on_progress)
             with organize_lock:
@@ -1794,6 +1816,7 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     "delete_folders": bool(data.get("delete_folders")),
                     "clean_junk": bool(data.get("clean_junk")),
                     "include_other": bool(data.get("include_other")),
+                    "no_rescan": bool(data.get("no_rescan")),
                     "limit": int(data.get("limit") or 0) or None,
                 }
                 if not (opts["apply"] or opts["clean_junk"]):
