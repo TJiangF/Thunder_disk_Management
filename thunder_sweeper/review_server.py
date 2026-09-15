@@ -856,15 +856,21 @@ function catTree() {
   }
   return root;
 }
-function _fnode(n, cnt) {
+function _countSubtree(node, cnt) {
+  let n = cnt[node.id] || 0;
+  for (const c of node.children) n += _countSubtree(c, cnt);
+  node.count = n;
+  return n;
+}
+function _fnode(n) {
   const has = n.children && n.children.length;
   const arrow = has ? '<span class="arrow">›</span>' : '';
-  const sub = has ? '<div class="submenu">' + n.children.map(c => _fnode(c, cnt)).join('') + '</div>' : '';
+  const sub = has ? '<div class="submenu">' + n.children.map(c => _fnode(c)).join('') + '</div>' : '';
   const dot = '<span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + (COLORS[n.id]||'#888') + ';margin-right:6px"></span>';
   const sel = (n.id === filterCat);
   const check = sel ? '<span class="check">✓</span>' : '';
   return '<div class="fitem' + (sel ? ' sel' : '') + '" onclick="setFilter(\'' + n.id + '\'); event.stopPropagation();">' +
-    '<span>' + dot + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (cnt[n.id]||0) + '</span></span>' +
+    '<span>' + dot + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (n.count||0) + '</span></span>' +
     '<span>' + check + arrow + '</span>' + sub + '</div>';
 }
 function renderChips() {
@@ -873,11 +879,11 @@ function renderChips() {
   const cnt = {};
   for (const v of VIDEOS) cnt[catOf(v)] = (cnt[catOf(v)]||0) + 1;
   const tree = catTree();
-  const allSel = !filterCat;
+  for (const n of tree) _countSubtree(n, cnt);
   box.innerHTML =
-    '<div class="fitem' + (allSel ? ' sel' : '') + '" onclick="setFilter(null); event.stopPropagation();">' +
-      '<span>全部分类</span>' + (allSel ? '<span class="check">✓</span>' : '') + '</div>' +
-    tree.map(n => _fnode(n, cnt)).join('');
+    '<div class="fitem' + (!filterCat ? ' sel' : '') + '" onclick="setFilter(null); event.stopPropagation();">' +
+      '<span>全部分类</span>' + (!filterCat ? '<span class="check">✓</span>' : '') + '</div>' +
+    tree.map(n => _fnode(n)).join('');
   const btn = document.getElementById('filter-btn');
   if (btn) {
     const node = filterCat && CATEGORIES.find(c => c.id === filterCat);
