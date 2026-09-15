@@ -1543,11 +1543,14 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     dataset = videos
     by_id = {v["id"]: v for v in videos}
     resume_index = _resume_index(videos)
-    progress = util.read_json(util.REVIEW_PROGRESS_FILE, {}) or {}
-    resume_id = progress.get("id") or ""
-    saved = util.read_json(util.SELECTIONS_FILE, {}) or {}
-    initial_selected = [i for i in (saved.get("delete") or []) if i in by_id]
-    html = build_html(videos, resume_index, initial_selected, resume_id)
+
+    def render_index() -> str:
+        """Rebuild the page so a normal refresh reflects the latest selections."""
+        saved = util.read_json(util.SELECTIONS_FILE, {}) or {}
+        sel = [i for i in (saved.get("delete") or []) if i in by_id]
+        prog = util.read_json(util.REVIEW_PROGRESS_FILE, {}) or {}
+        return build_html(dataset, resume_index, sel, prog.get("id") or "")
+
     submitted: dict = {"done": False, "selections": None}
     httpd_holder: dict = {}
     shots_state = {"running": False, "finished": False, "current": 0, "total": 0,
@@ -1654,7 +1657,7 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path in ("/", "/index.html"):
-                self._send(200, html.encode("utf-8"))
+                self._send(200, render_index().encode("utf-8"))
                 return
             if parsed.path.startswith("/thumb/"):
                 self._serve_thumb(parsed.path[len("/thumb/"):])
