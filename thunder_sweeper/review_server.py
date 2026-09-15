@@ -334,7 +334,10 @@ const selected = new Set();          // file ids
 const selectedFolders = new Set();   // folder paths ("/a/b")
 const byId = Object.fromEntries(VIDEOS.map(v => [v.id, v]));
 (INITIAL_SELECTED || []).forEach(id => { if (byId[id]) selected.add(id); });
-let tab = 'files';                    // folder segments
+let tab = (function () {
+  try { const t = sessionStorage.getItem('sweeper_tab'); if (t) return t; } catch (e) {}
+  return 'files';
+})();                    // folder segments
 let curPath = [];                     // folder segments
 let sortKey = 'size', sortAsc = false;
 
@@ -1454,6 +1457,7 @@ document.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('cl
 const tabScroll = {};
 function setTab(t) {
   if (t === tab) return;
+  try { sessionStorage.setItem('sweeper_tab', t); } catch (e) {}
   tabScroll[tab] = window.scrollY || 0;
   tab = t;
   render();
