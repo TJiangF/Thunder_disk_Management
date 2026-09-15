@@ -243,22 +243,15 @@ PAGE = r"""<!doctype html>
     <div id="sellist"></div>
   </section>
   <section id="view-rules" class="hidden">
-    <details open><summary>分类树（可增删/改名/加子类；organize 会按此创建目录）</summary>
+    <details open><summary>分类树（点每行「关键词」展开编辑；匹配时子分类优先，逐级向上）</summary>
       <div id="cat-editor"></div>
       <div style="margin-top:8px"><button onclick="addCat(null)">＋ 新增顶级分类</button></div>
     </details>
-    <p class="stat">每行一个关键字，大小写不敏感、子串匹配；命中即归入该分类。保存后立即重新分类并刷新页面。</p>
-    <div class="rules-grid">
-      <label>日本<div class="cat" style="background:#e06c75">jp</div><textarea id="rule-jp" spellcheck="false"></textarea></label>
-      <label>欧美<div class="cat" style="background:#61afef">west</div><textarea id="rule-west" spellcheck="false"></textarea></label>
-      <label>国产<div class="cat" style="background:#e5c07b">cn</div><textarea id="rule-cn" spellcheck="false"></textarea></label>
-      <label>非成人<div class="cat" style="background:#56b6c2">non_adult</div><textarea id="rule-non_adult" spellcheck="false"></textarea></label>
-    </div>
-    <p class="stat" style="margin-top:12px">最高优先级覆盖（每行 <code>关键字=分类</code>，分类填 jp / west / cn / adult_other / non_adult）：</p>
-    <textarea id="rule-overrides" spellcheck="false" style="width:100%;height:120px;margin-top:4px"></textarea>
+    <details><summary>最高优先级覆盖（每行 <code>关键字=分类</code>，分类名/ID 均可）</summary>
+      <textarea id="rule-overrides" spellcheck="false" style="width:100%;height:120px;margin-top:8px"></textarea>
+      <div style="margin-top:8px"><button class="primary" onclick="saveOverrides()">保存覆盖</button></div>
+    </details>
     <div style="margin-top:12px">
-      <button class="primary" onclick="saveRules()">保存并重新分类</button>
-      <button onclick="resetRules()">清空自定义</button>
       <button onclick="resetClassify()">重置全部分类（含手动）</button>
       <span id="rule-msg" class="stat" style="margin-left:8px"></span>
     </div>
@@ -618,10 +611,6 @@ function renderOrganize() {
 
 /* ---------------- classify rules ---------------- */
 function renderRules() {
-  for (const c of ['jp','west','cn','non_adult']) {
-    const el = document.getElementById('rule-' + c);
-    if (el) el.value = ((RULES.extra && RULES.extra[c]) || []).join('\n');
-  }
   const ov = (RULES.overrides || []).map(o => o.keyword + '=' + o.category).join('\n');
   const oe = document.getElementById('rule-overrides');
   if (oe) oe.value = ov;
@@ -644,16 +633,76 @@ function applyCats(data) {
   if (tab === 'review') renderReview();
   if (tab === 'dedupe') renderDedupe();
 }
+const kwOpen = new Set();
 function renderCatsEditor() {
   const box = document.getElementById('cat-editor');
   if (!box) return;
-  box.innerHTML = CATEGORIES.map(c =>
-    '<div class="sel-row" style="padding-left:' + (c.depth * 18) + 'px">' +
-      '<div class="grow">' + esc(c.name) + '</div>' +
+  box.innerHTML = CATEGORIES.map(c => {
+    const kws = (RULES.extra && RULES.extra[c.id]) || [];
+    const open = kwOpen.has(c.id);
+    let h = '<div class="sel-row" style="padding-left:' + (c.depth * 18) + 'px">' +
+      '<div class="grow">' + esc(c.name) +
+        (kws.length ? ' <span class="badge">' + kws.length + ' 关键词</span>' : '') + '</div>' +
+      '<button onclick="toggleKw(\'' + c.id + '\')">' + (open ? '收起' : '关键词') + '</button>' +
       '<button onclick="addCat(\'' + c.id + '\')">＋子类</button>' +
       '<button onclick="renameCat(\'' + c.id + '\')">改名</button>' +
       '<button onclick="deleteCat(\'' + c.id + '\')">删除</button>' +
-    '</div>').join('');
+    '</div>';
+    if (open) {
+      h += '<div style="padding:4px 0 10px ' + (c.depth * 18 + 8) + 'px">' +
+        '<textarea id="kw-' + c.id + '" spellcheck="false" style="width:100%;height:140px;background:#0f1115;color:#e6e8eb;border:1px solid #2a2e35;border-radius:8px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace">' +
+          esc(kws.join('\n')) + '</textarea>' +
+        '<div style="margin-top:6px">' +
+          '<button class="primary" onclick="saveKeywords(\'' + c.id + '\')">保存关键词并重新分类</button> ' +
+          '<button onclick="toggleKw(\'' + c.id + '\')">取消</button>' +
+        '</div></div>';
+    }
+    return h;
+  }).join('');
+}
+function toggleKw(id) { kwOpen.has(id) ? kwOpen.delete(id) : kwOpen.add(id); renderCatsEditor(); }
+async function saveKeywords(id) {
+  const extra = {};
+  for (const k in (RULES.extra || {})) extra[k] = RULES.extra[k];
+  extra[id] = _lines('kw-' + id);
+  kwOpen.delete(id);
+  await _saveRules(extra, RULES.overrides || [], '已保存「' + (LABELS[id] || id) + '」的关键词并重新分类');
+}
+async function saveOverrides() {
+  const overrides = [];
+  let bad = 0;
+  for (const line of _lines('rule-overrides')) {
+    const idx = line.lastIndexOf('=');
+    if (idx <= 0) { bad++; continue; }
+    const keyword = line.slice(0, idx).trim();
+    let cid = line.slice(idx + 1).trim();
+    if (!CATS.includes(cid)) {
+      const hit = CATEGORIES.find(c => c.name === cid || (c.path || []).join('/') === cid);
+      if (hit) cid = hit.id;
+    }
+    if (!keyword || !CATS.includes(cid)) { bad++; continue; }
+    overrides.push({ keyword, category: cid });
+  }
+  const extra = {};
+  for (const k in (RULES.extra || {})) extra[k] = RULES.extra[k];
+  const msg = document.getElementById('rule-msg');
+  if (bad && msg) msg.textContent = '有 ' + bad + ' 行无效，已忽略；保存中…';
+  await _saveRules(extra, overrides, '已保存覆盖规则');
+}
+async function _saveRules(extra, overrides, okMsg) {
+  const msg = document.getElementById('rule-msg');
+  try {
+    const r = await fetch('/rules', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ rules: { extra, overrides } })});
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '失败');
+    applyItems(j.items);
+    RULES.extra = extra; RULES.overrides = overrides;
+    renderChips(); renderStat(); renderCatsEditor();
+    if (tab === 'files') renderFiles();
+    if (tab === 'review') renderReview();
+    if (msg) msg.textContent = okMsg + ' ✓';
+  } catch (e) { if (msg) msg.textContent = '保存失败：' + e; }
 }
 async function catsApi(path, body) {
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
@@ -725,38 +774,6 @@ async function applyBatchCategory() {
     toast('已把 ' + ids.length + ' 个文件分类为「' + label + '」');
   } catch (e) { alert('批量分类失败：' + e); }
 }
-async function saveRules() {
-  const extra = {};
-  for (const k in (RULES.extra || {})) extra[k] = RULES.extra[k];
-  for (const c of ['jp','west','cn','non_adult']) extra[c] = _lines('rule-' + c);
-  const overrides = [];
-  let bad = 0;
-  for (const line of _lines('rule-overrides')) {
-    const idx = line.lastIndexOf('=');
-    if (idx <= 0) { bad++; continue; }
-    const keyword = line.slice(0, idx).trim();
-    const category = line.slice(idx + 1).trim();
-    if (!keyword || !['jp','west','cn','adult_other','non_adult'].includes(category)) { bad++; continue; }
-    overrides.push({ keyword, category });
-  }
-  const msg = document.getElementById('rule-msg');
-  msg.textContent = bad ? ('有 ' + bad + ' 行格式不对，已忽略；保存中…') : '保存中…';
-  try {
-    const r = await fetch('/rules', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ rules: { extra, overrides } }) });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || '保存失败');
-    applyItems(j.items);
-    RULES.extra = extra; RULES.overrides = overrides;
-    renderChips(); renderStat();
-    if (tab === 'files') renderFiles();
-    if (tab === 'review') renderReview();
-    msg.textContent = '已保存并重新分类 ✓';
-  } catch (e) { msg.textContent = '保存失败：' + e; }
-}
-async function resetRules() {
-  await saveRulesWith({ extra: {}, overrides: [] });
-}
 async function resetClassify() {
   if (!confirm('重置全部自动+手动分类结果？\n（会清空自定义规则和所有手动分类）')) return;
   const msg = document.getElementById('rule-msg');
@@ -765,28 +782,12 @@ async function resetClassify() {
     const r = await fetch('/reset_classify', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || '失败');
-    for (const v of VIDEOS) { if (j.items && j.items[v.id]) { const r = j.items[v.id]; v.category = r.category; v.auto_category = r.auto_category; v.manual = r.manual; } }
+    applyItems(j.items);
     RULES.extra = {}; RULES.overrides = [];
     renderRules(); renderChips(); renderStat();
     if (tab === 'files') renderFiles();
     if (tab === 'review') renderReview();
     msg.textContent = '已重置全部分类 ✓';
-  } catch (e) { msg.textContent = '失败：' + e; }
-}
-async function saveRulesWith(rules) {
-  const msg = document.getElementById('rule-msg');
-  msg.textContent = '重置中…';
-  try {
-    const r = await fetch('/rules', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ rules }) });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || '失败');
-    for (const v of VIDEOS) { if (j.items && j.items[v.id]) { const r = j.items[v.id]; v.category = r.category; v.auto_category = r.auto_category; v.manual = r.manual; } }
-    RULES.extra = rules.extra; RULES.overrides = rules.overrides;
-    renderRules(); renderChips(); renderStat();
-    if (tab === 'files') renderFiles();
-    if (tab === 'review') renderReview();
-    msg.textContent = '已清空自定义规则 ✓';
   } catch (e) { msg.textContent = '失败：' + e; }
 }
 

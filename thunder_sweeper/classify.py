@@ -177,13 +177,30 @@ def _keywords(base: list[str], cat: str, rules: dict) -> list[str]:
     return list(base) + list((rules.get("extra") or {}).get(cat, []))
 
 
+def _kw_hit(label: str, base: list, extra: list | None) -> bool:
+    for kw in base:
+        if kw.lower() in label:
+            return True
+    for kw in (extra or []):
+        if str(kw).strip().lower() in label:
+            return True
+    return False
+
+
 def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str, str]:
-    """Return (category, reason)."""
+    """Return (category, reason).
+
+    Matching order: user overrides -> folder hints -> category keywords from the
+    **deepest sub-category up to its parents** (tree order) -> generic fallbacks.
+    """
+    from . import categories
+
     if rules is None:
         rules = load_user_rules()
 
     label = f"{path} {name}".lower()
     upper = f"{path} {name}"
+    extra = rules.get("extra") or {}
 
     # non-video / document / archive files are not adult movies
     if _ext(name) in NON_ADULT_EXTS:
@@ -195,7 +212,7 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
         if kw and kw in label:
             return ov["category"], f"override:{kw}"
 
-    # explicit folder hints first
+    # explicit folder hints
     if re.search(r"(日本|jav|日系)", label):
         return "jp", "folder/jp-hint"
     if re.search(r"(欧美|western|英文)", label):
@@ -203,32 +220,32 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
     if re.search(r"(国产|国产自拍|华语|中文)", label):
         return "cn", "folder/cn-hint"
 
-    # 国产
-    if _has_code(upper, set(CN_CODE_PREFIXES)):
-        return "cn", "cn-code"
-    for kw in _keywords(CN_KEYWORDS, "cn", rules):
-        if kw.lower() in label:
-            return "cn", f"cn:{kw}"
-
-    # 日本
-    if _has_code(upper, set(JP_STUDIO_PREFIXES)):
-        return "jp", "jp-code"
-    for kw in _keywords(JP_DOMAIN_PREFIXES, "jp", rules):
-        if kw in label:
-            return "jp", f"jp-domain:{kw}"
-    for kw in _keywords(JP_KEYWORDS, "jp", rules):
-        if kw.lower() in label:
-            return "jp", f"jp:{kw}"
-
-    # 欧美
-    for kw in _keywords(WEST_KEYWORDS, "west", rules):
-        if kw in label:
-            return "west", f"west:{kw}"
-
-    # 非成人
-    for kw in _keywords(NON_ADULT_KEYWORDS, "non_adult", rules):
-        if kw.lower() in label:
-            return "non_adult", f"non-adult:{kw}"
+    # category keywords: deepest sub-categories first, then parents
+    nodes = categories.flat()
+    order = sorted(nodes, key=lambda x: -x.get("depth", 0))
+    for node in order:
+        cid = node.get("id")
+        if cid == "jp":
+            if _has_code(upper, set(JP_STUDIO_PREFIXES)):
+                return "jp", "jp-code"
+            if any(d in label for d in JP_DOMAIN_PREFIXES):
+                return "jp", "jp-domain"
+            if _kw_hit(label, JP_KEYWORDS, extra.get("jp")):
+                return "jp", "jp-kw"
+        elif cid == "cn":
+            if _has_code(upper, set(CN_CODE_PREFIXES)):
+                return "cn", "cn-code"
+            if _kw_hit(label, CN_KEYWORDS, extra.get("cn")):
+                return "cn", "cn-kw"
+        elif cid == "west":
+            if _kw_hit(label, WEST_KEYWORDS, extra.get("west")):
+                return "west", "west-kw"
+        elif cid == "non_adult":
+            if _kw_hit(label, NON_ADULT_KEYWORDS, extra.get("non_adult")):
+                return "non_adult", "non-adult-kw"
+        else:
+            if _kw_hit(label, [], extra.get(cid)):
+                return cid, f"cat-kw:{cid}"
 
     # fallback: pure-latin multi-word titles -> western
     if not re.search(r"[\u4e00-\u9fff]", name):
@@ -246,10 +263,11 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
 
 
 def load_manual() -> dict:
-    from . import util
+    from . import categories, util
 
     m = util.read_json(util.MANUAL_CATS_FILE, {}) or {}
-    return {k: v for k, v in m.items() if v in LABELS}
+    valid = categories.ids()
+    return {k: v for k, v in m.items() if v in valid or v in LABELS}
 
 
 def save_manual(m: dict) -> None:
