@@ -200,6 +200,17 @@ def _kw_hit(label: str, base: list, extra: list | None) -> bool:
     return False
 
 
+_BASE_CACHE: list = []
+
+
+def _organize_base() -> str:
+    if not _BASE_CACHE:
+        from . import util
+        base = util.load_config().get("organize_base", "/整理")
+        _BASE_CACHE.append("/" + (str(base).strip("/") or "整理"))
+    return _BASE_CACHE[0]
+
+
 def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str, str]:
     """Return (category, reason).
 
@@ -225,36 +236,54 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
         if kw and kw in label:
             return ov["category"], f"override:{kw}"
 
-    # explicit folder hints
-    if re.search(r"(日本|jav|日系)", label):
-        return "jp", "folder/jp-hint"
-    if re.search(r"(欧美|western|英文)", label):
-        return "west", "folder/west-hint"
-    if re.search(r"(国产|国产自拍|华语|中文)", label):
-        return "cn", "folder/cn-hint"
+    # explicit folder hints (ignore the organize target tree, whose names are
+    # themselves derived from categories)
+    base = _organize_base()
+    p = path or "/"
+    under_base = (p == base) or p.startswith(base + "/")
+    if not under_base:
+        if re.search(r"(日本|jav|日系)", label):
+            return "jp", "folder/jp-hint"
+        if re.search(r"(欧美|western|英文)", label):
+            return "west", "folder/west-hint"
+        if re.search(r"(国产|国产自拍|华语|中文)", label):
+            return "cn", "folder/cn-hint"
 
     # category keywords: deepest sub-categories first, then parents
     nodes = categories.flat()
     order = sorted(nodes, key=lambda x: -x.get("depth", 0))
     for node in order:
         cid = node.get("id")
+        custom = bool(extra.get(cid))
         if cid == "jp":
-            if _has_code(upper, set(JP_STUDIO_PREFIXES)):
+            if custom:
+                if _kw_hit(label, [], extra.get("jp")):
+                    return "jp", "jp-kw"
+            elif _has_code(upper, set(JP_STUDIO_PREFIXES)):
                 return "jp", "jp-code"
-            if any(d in label for d in JP_DOMAIN_PREFIXES):
+            elif any(d in label for d in JP_DOMAIN_PREFIXES):
                 return "jp", "jp-domain"
-            if _kw_hit(label, JP_KEYWORDS, extra.get("jp")):
+            elif _kw_hit(label, JP_KEYWORDS, None):
                 return "jp", "jp-kw"
         elif cid == "cn":
-            if _has_code(upper, set(CN_CODE_PREFIXES)):
+            if custom:
+                if _kw_hit(label, [], extra.get("cn")):
+                    return "cn", "cn-kw"
+            elif _has_code(upper, set(CN_CODE_PREFIXES)):
                 return "cn", "cn-code"
-            if _kw_hit(label, CN_KEYWORDS, extra.get("cn")):
+            elif _kw_hit(label, CN_KEYWORDS, None):
                 return "cn", "cn-kw"
         elif cid == "west":
-            if _kw_hit(label, WEST_KEYWORDS, extra.get("west")):
+            if custom:
+                if _kw_hit(label, [], extra.get("west")):
+                    return "west", "west-kw"
+            elif _kw_hit(label, WEST_KEYWORDS, None):
                 return "west", "west-kw"
         elif cid == "non_adult":
-            if _kw_hit(label, NON_ADULT_KEYWORDS, extra.get("non_adult")):
+            if custom:
+                if _kw_hit(label, [], extra.get("non_adult")):
+                    return "non_adult", "non-adult-kw"
+            elif _kw_hit(label, NON_ADULT_KEYWORDS, None):
                 return "non_adult", "non-adult-kw"
         else:
             if _kw_hit(label, [], extra.get(cid)):

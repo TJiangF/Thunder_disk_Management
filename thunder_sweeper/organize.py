@@ -85,9 +85,9 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
         if not names:
             continue
         src = f.get("path") or "/"
-        if under_base(src):
-            continue
         target = f"{base}/{'/'.join(names)}"
+        if src == target or src.startswith(target + "/"):
+            continue  # already in the right place
         name = f.get("name") or f.get("id")
         stem, ext = _split_ext(name)
         cand, k = name, 2
