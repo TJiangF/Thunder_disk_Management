@@ -882,11 +882,18 @@ function _fnode(n) {
     '<span>' + dot + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (n.count||0) + '</span></span>' +
     '<span>' + check + arrow + '</span>' + sub + '</div>';
 }
+function _filterBase() {
+  if (tab === 'files') { const node = getNode(curPath); return node ? node.files : []; }
+  if (tab === 'review') return VIDEOS.filter(v => v.thumbs && v.thumbs.length);
+  if (tab === 'selected') return [...selected].map(id => byId[id]).filter(Boolean);
+  return VIDEOS;
+}
 function renderChips() {
   const box = document.getElementById('chips');
   if (!box) return;
+  const base = _filterBase();
   const cnt = {};
-  for (const v of VIDEOS) cnt[catOf(v)] = (cnt[catOf(v)]||0) + 1;
+  for (const v of base) cnt[catOf(v)] = (cnt[catOf(v)]||0) + 1;
   const tree = catTree();
   for (const n of tree) _countSubtree(n, cnt);
   box.innerHTML =
