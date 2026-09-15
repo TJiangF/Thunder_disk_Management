@@ -11,7 +11,36 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+APP_NAME = "ThunderSweeper"
+APP_VERSION = "1.0.0"
+
+SOURCE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _default_home() -> Path:
+    """Where user data (tokens, scan results, thumbs, config) lives.
+
+    - ``THUNDER_SWEEPER_HOME`` env var wins (handy for tests / portables).
+    - Running from source keeps everything inside the project folder
+      (backwards compatible with existing installs).
+    - A packaged app (PyInstaller) must not write inside its own bundle,
+      so it uses the platform's user-data directory.
+    """
+    env = os.environ.get("THUNDER_SWEEPER_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    if not getattr(sys, "frozen", False):
+        return SOURCE_ROOT
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / APP_NAME
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / APP_NAME
+
+
+ROOT = _default_home()
 DATA_DIR = ROOT / "data"
 THUMB_DIR = DATA_DIR / "thumbs"
 TOKENS_FILE = DATA_DIR / "tokens.json"
@@ -30,7 +59,7 @@ CHROME_PROFILE = ROOT / ".chrome-profile"
 CONFIG_FILE = ROOT / "config.json"
 
 DEFAULT_CONFIG = {
-    "chrome_path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "chrome_path": "",  # 留空则自动探测（Chrome/Edge/Brave/Chromium）
     "debug_port": 9222,
     "fractions": [0.06, 0.18, 0.30, 0.42, 0.54, 0.66, 0.78, 0.90],
     "thumb_width": 480,
@@ -123,7 +152,8 @@ def backup_file(path: Path, keep: int = 20) -> None:
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dst = BACKUP_DIR / f"{path.name}.{ts}.bak"
+        uniq = os.urandom(3).hex()
+        dst = BACKUP_DIR / f"{path.name}.{ts}.{uniq}.bak"
         shutil.copy2(path, dst)
         for old in sorted(BACKUP_DIR.glob(path.name + ".*.bak"))[:-keep]:
             try:
@@ -174,3 +204,65 @@ def cap_workers(n) -> int:
 
 def sleep(seconds: float) -> None:
     time.sleep(max(0.0, seconds))
+
+
+# --------------------------------------------------------------------------- #
+# Chrome discovery
+# --------------------------------------------------------------------------- #
+_BROWSER_APPS_MAC = [
+    "Google Chrome",
+    "Google Chrome Canary",
+    "Microsoft Edge",
+    "Brave Browser",
+    "Chromium",
+    "Vivaldi",
+]
+_BROWSER_BINS = [
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "microsoft-edge", "microsoft-edge-stable", "brave-browser", "vivaldi",
+]
+_BROWSER_PATHS_WIN = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+]
+
+
+def find_chrome(cfg: dict | None = None) -> str | None:
+    """Locate a Chromium-based browser to drive for login/token harvest.
+
+    Order: explicit ``chrome_path`` in config → ``THUNDER_SWEEPER_CHROME`` env →
+    ``PATH`` → well-known macOS/Windows install locations.
+    """
+    configured = (cfg or {}).get("chrome_path")
+    if configured and Path(configured).exists():
+        return configured
+    env = os.environ.get("THUNDER_SWEEPER_CHROME")
+    if env and Path(env).exists():
+        return env
+    for name in _BROWSER_BINS:
+        found = shutil.which(name)
+        if found:
+            return found
+    if sys.platform == "darwin":
+        for app in _BROWSER_APPS_MAC:
+            exe = Path(f"/Applications/{app}.app/Contents/MacOS/{app}")
+            if exe.exists():
+                return str(exe)
+            exe = Path.home() / "Applications" / f"{app}.app" / "Contents" / "MacOS" / app
+            if exe.exists():
+                return str(exe)
+    elif sys.platform.startswith("win"):
+        for path in _BROWSER_PATHS_WIN:
+            if Path(path).exists():
+                return path
+    return None
+
+
+def data_dir_display() -> str:
+    return str(DATA_DIR)
+
+
+def app_version() -> str:
+    return APP_VERSION

@@ -582,7 +582,9 @@ def main(argv=None):
         prog="thunder_sweeper",
         description="迅雷云盘视频清理：按大小收集 -> 云播直链截图 -> 本地勾选 -> 移入回收站",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="version",
+                        version=f"ThunderSweeper {util.app_version()}")
+    sub = parser.add_subparsers(dest="command", required=False)
 
     p_login = sub.add_parser("login", help="启动调试 Chrome 并抓取迅雷 token")
     p_login.add_argument("--restart", action="store_true", help="先关闭旧的调试 Chrome 再重新启动")
@@ -632,6 +634,10 @@ def main(argv=None):
     p_apply.add_argument("--yes", action="store_true", help="跳过确认")
     p_apply.add_argument("--dry-run", action="store_true", help="只演示不执行")
 
+    sub.add_parser("wizard", help="交互式菜单（不带参数运行时自动进入）")
+    p_self = sub.add_parser("selftest", help="运行内置自检（--live 会真实调用迅雷接口做沙箱测试）")
+    p_self.add_argument("--live", action="store_true", help="包含真实 API 沙箱测试（需已登录）")
+
     args = parser.parse_args(_normalize_argv(argv if argv is not None else sys.argv[1:]))
     cfg = util.load_config()
 
@@ -647,6 +653,17 @@ def main(argv=None):
         "dedupe": cmd_dedupe,
         "organize": cmd_organize,
     }
+    if args.command == "selftest":
+        from . import selftest
+
+        return selftest.run(live=args.live)
+    if args.command in (None, "wizard"):
+        from . import wizard
+
+        if args.command is None and not sys.stdin.isatty():
+            parser.print_help()
+            return 0
+        return wizard.run(cfg)
     try:
         handlers[args.command](args, cfg)
     except KeyboardInterrupt:

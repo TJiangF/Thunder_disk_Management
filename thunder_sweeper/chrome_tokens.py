@@ -54,10 +54,13 @@ def launch_chrome(cfg: dict, port: Optional[int] = None, restart: bool = False) 
         util.log("现有调试 Chrome 无可用页面且无法新建，尝试重启", "WARN")
         _kill_our_chrome(port)
 
-    chrome = cfg["chrome_path"]
-    if not os.path.exists(chrome):
-        raise TokenError(f"找不到 Chrome: {chrome}（可在 config.json 中修改 chrome_path）")
-
+    chrome = util.find_chrome(cfg)
+    if not chrome:
+        raise TokenError(
+            "找不到可用的浏览器（Chrome / Edge / Brave / Chromium）。\n"
+            "请安装其中之一，或在 config.json 中把 chrome_path 指向浏览器可执行文件，"
+            "也可设置环境变量 THUNDER_SWEEPER_CHROME。"
+        )
     util.ensure_dirs()
     profile = str(util.CHROME_PROFILE)
     args = [
@@ -253,7 +256,7 @@ def harvest(cfg: dict, timeout: float = 600, restart: bool = False) -> dict:
         if msg.get("method") != "Network.requestWillBeSent":
             return
         req = msg.get("params", {}).get("request", {})
-        if req.get("url") == CAPTCHA_INIT_URL and req.get("postData"):
+        if req.get("url", "").startswith(CAPTCHA_INIT_URL) and req.get("postData"):
             try:
                 captured["meta"] = json.loads(req["postData"])
             except json.JSONDecodeError:
@@ -287,6 +290,57 @@ def harvest(cfg: dict, timeout: float = 600, restart: bool = False) -> dict:
         if not store.get("credentials.access_token"):
             raise TokenError("未获取到 access_token，请确认已成功登录迅雷网盘")
 
+        # 迅雷会把上一次的 captcha/init 请求体缓存起来复用，所以我们主动清掉
+        # 缓存的 captcha 键并刷新页面，逼它重新发起 captcha/init，从而抓到
+        # captcha_sign / client_version / package_name / timestamp 等签名参数。
+        if not captured.get("meta"):
+            util.log("正在获取验证码签名参数（刷新一次页面）...")
+            try:
+                cdp.evaluate(
+                    "(() => { const ks = []; for (let i = 0; i < localStorage.length; i++) "
+                    "{ const k = localStorage.key(i); if (k.startsWith('captcha_')) ks.push(k); } "
+                    "ks.forEach(k => localStorage.removeItem(k)); location.reload(); return ks.length; })()"
+                )
+            except Exception:
+                pass
+            meta_deadline = time.time() + 25
+            while not captured.get("meta") and time.time() < meta_deadline:
+                cdp.pump(1.0)
+            if captured.get("meta"):
+                meta = captured["meta"]
+                for field in ("client_id", "device_id", "client_version", "package_name",
+                              "captcha_sign", "timestamp", "user_id"):
+                    if meta.get(field):
+                        store[f"captcha.{field}"] = meta[field]
+                inner = meta.get("meta")
+                if isinstance(inner, dict):
+                    for field in META_FIELDS:
+                        if inner.get(field):
+                            store[f"captcha.{field}"] = inner[field]
+                store["_captcha_meta_at"] = int(time.time())
+                util.log("已获取签名参数（captcha_sign 等）")
+
+        # The page writes a fresh access_token a moment after load; make sure we
+        # didn't grab a token the API already rejects.
+        deadline = time.time() + 40
+        last_tok = store.get("credentials.access_token")
+        while not _token_ok(last_tok) and time.time() < deadline:
+            util.log("当前 access_token 未被接受，等待浏览器刷新…", "WARN")
+            cdp.pump(1.5)
+            raw = cdp.evaluate(_LOCALSTORAGE_EXPR)
+            try:
+                ls = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                ls = {}
+            newer = _build_store(ls, captured.get("meta"))
+            tok = newer.get("credentials.access_token")
+            if tok and tok != last_tok:
+                for k, v in newer.items():
+                    if not k.startswith("_") and v:
+                        store[k] = v
+                last_tok = tok
+            time.sleep(1)
+
         store["_harvested_at"] = int(time.time())
         _dump_raw(store, ls)
         util.atomic_write_json(util.TOKENS_FILE, store)
@@ -314,6 +368,25 @@ def _build_store(ls: dict, meta: Optional[dict]) -> dict:
             parsed = json.loads(value)
         except (json.JSONDecodeError, TypeError):
             parsed = None
+
+        # 迅雷 pan 的 localStorage 把 client_id 编码在键名里：
+        #   credentials_<client_id> = {access_token, refresh_token, ...}
+        #   captcha_<client_id>     = {token, expires_at}
+        for prefix in ("credentials_", "captcha_"):
+            if low.startswith(prefix) and isinstance(parsed, dict):
+                cid = key[len(prefix):]
+                if cid:
+                    store["captcha.client_id"] = cid
+                if prefix == "credentials_":
+                    for k in ("access_token", "refresh_token"):
+                        if parsed.get(k):
+                            store[f"credentials.{k}"] = parsed[k]
+                    if parsed.get("user_id") or parsed.get("sub"):
+                        store["captcha.user_id"] = parsed.get("user_id") or parsed.get("sub")
+                else:
+                    if parsed.get("token"):
+                        store["captcha.token"] = parsed["token"]
+                        store["captcha.expires_at"] = int(time.time()) + 300
 
         if low in ("deviceid", "device_id", "deviceid_sign"):
             store["device_id"] = value
@@ -347,8 +420,11 @@ def _build_store(ls: dict, meta: Optional[dict]) -> dict:
             if field in meta_inner:
                 store[f"captcha.{field}"] = meta_inner[field]
 
+    if store.get("device_id") and not store.get("captcha.device_id"):
+        store["captcha.device_id"] = store["device_id"]
+
     now = int(time.time())
-    if store.get("captcha.token"):
+    if store.get("captcha.token") and not store.get("captcha.expires_at"):
         store["captcha.expires_at"] = now + 300
     if store.get("credentials.access_token"):
         store["credentials.expires_at"] = now + 43200
@@ -357,6 +433,22 @@ def _build_store(ls: dict, meta: Optional[dict]) -> dict:
 
 def _dump_raw(store: dict, ls: dict) -> None:
     store["_raw_localstorage_keys"] = sorted(ls.keys())
+
+
+def _token_ok(token: str) -> bool:
+    """Cheap probe: does the API accept this access token?  Network errors are
+    treated as 'ok' so a flaky connection never blocks login."""
+    if not token:
+        return False
+    try:
+        resp = requests.get(
+            "https://api-pan.xunlei.com/drive/v1/files",
+            headers={"Authorization": "Bearer " + token, "Origin": "https://pan.xunlei.com",
+                     "Referer": "https://pan.xunlei.com/", "User-Agent": UA},
+            params={"parent_id": "", "limit": 1}, timeout=15)
+    except requests.RequestException:
+        return True
+    return resp.status_code != 401
 
 
 # --------------------------------------------------------------------------- #
@@ -426,20 +518,46 @@ class TokenProvider:
             "x-protocol-version": "301",
             "x-sdk-version": "3.4.20",
         }
-        resp = requests.post(url, headers=headers, data=payload, timeout=self.cfg["request_timeout"])
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            raise TokenError(f"刷新 token 响应异常: {resp.text[:200]}") from exc
-        if "access_token" not in data:
-            raise TokenError(f"刷新 token 失败: {data}")
-        self.store["credentials.access_token"] = data["access_token"]
-        if data.get("refresh_token"):
-            self.store["credentials.refresh_token"] = data["refresh_token"]
-        self.store["credentials.expires_at"] = int(time.time()) + int(data.get("expires_in", 43200))
-        self._last_refresh = time.time()
-        self.save()
-        util.log("access_token 已刷新")
+        last_err: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(url, headers=headers, data=payload,
+                                     timeout=self.cfg["request_timeout"])
+            except requests.RequestException as exc:
+                last_err = TokenError(f"刷新 token 网络错误: {exc}")
+                time.sleep(1.5 * attempt)
+                continue
+            try:
+                data = resp.json()
+            except ValueError:
+                last_err = TokenError(f"刷新 token 响应异常 HTTP {resp.status_code}: {resp.text[:120]}")
+                if resp.status_code >= 500 and attempt < 3:
+                    time.sleep(1.5 * attempt)
+                    continue
+                break
+            if "access_token" not in data:
+                last_err = TokenError(f"刷新 token 失败: {data}")
+                if attempt < 3:
+                    time.sleep(1.5 * attempt)
+                    continue
+                break
+            self.store["credentials.access_token"] = data["access_token"]
+            if data.get("refresh_token"):
+                self.store["credentials.refresh_token"] = data["refresh_token"]
+            self.store["credentials.expires_at"] = int(time.time()) + int(data.get("expires_in", 43200))
+            self._last_refresh = time.time()
+            self.save()
+            util.log("access_token 已刷新")
+            return
+
+        # Last resort: the debug browser usually holds a newer token than we do.
+        self._chrome_refreshed = False
+        self._reread_from_chrome()
+        if self.get("credentials.access_token") and self._valid("credentials.expires_at", 60):
+            self._last_refresh = time.time()
+            util.log("已改用浏览器中的新 token")
+            return
+        raise last_err or TokenError("刷新 token 失败，请重新运行 login")
 
     def _reread_from_chrome(self) -> None:
         if self._chrome_refreshed:
