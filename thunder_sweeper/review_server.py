@@ -227,15 +227,10 @@ PAGE = r"""<!doctype html>
       <span class="stat">预览；勾选下面选项并点“执行”才会真正改动云盘。</span>
     </div>
     <div class="row" style="margin-bottom:10px">
-      <label class="stat"><input type="checkbox" id="org-apply" checked> 执行移动</label>
-      <label class="stat"><input type="checkbox" id="org-del"> 删除空的源文件夹</label>
+      <span class="stat">执行内容（默认执行移动，完成后自动重扫+分类）：</span>
+      <label class="stat"><input type="checkbox" id="org-del"> 删除空白文件夹</label>
       <label class="stat"><input type="checkbox" id="org-junk"> 清理垃圾文件夹</label>
-      <label class="stat"><input type="checkbox" id="org-other"> 含“成人-其他”</label>
       <label class="stat"><input type="checkbox" id="org-fix"> 纠正 /整理 内错误归类</label>
-      <label class="stat"><input type="checkbox" id="org-norescan"> 不自动重扫分类</label>
-      <span class="stat">限量</span>
-      <input id="org-limit" type="number" min="1" placeholder="全部"
-             style="width:80px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:4px 8px">
       <button class="danger" onclick="runOrganize()">执行</button>
     </div>
     <div class="row" style="margin-bottom:10px">
@@ -1233,20 +1228,16 @@ function markHere(btn) {
 /* ---------------- organize apply (from the page) ---------------- */
 async function runOrganize() {
   const opts = {
-    apply: document.getElementById('org-apply').checked,
+    apply: true,                                   // 移动默认开启
     delete_folders: document.getElementById('org-del').checked,
     clean_junk: document.getElementById('org-junk').checked,
-    include_other: document.getElementById('org-other').checked,
     fix_inside: document.getElementById('org-fix').checked,
-    no_rescan: document.getElementById('org-norescan').checked,
-    limit: parseInt(document.getElementById('org-limit').value, 10) || 0,
   };
-  if (!opts.apply && !opts.clean_junk) { alert('请至少勾选“执行移动”或“清理垃圾文件夹”'); return; }
-  const what = [];
-  if (opts.apply) what.push('执行移动' + (opts.limit ? ('（前 ' + opts.limit + ' 个）') : '') + (opts.delete_folders ? ' + 删除空的源文件夹' : ''));
+  const what = ['执行移动'];
+  if (opts.delete_folders) what.push('删除空白文件夹');
   if (opts.clean_junk) what.push('清理垃圾文件夹');
-  if (opts.include_other) what.push('含成人-其他');
-  what.push(opts.no_rescan ? '不自动重扫' : '完成后自动重扫+分类');
+  if (opts.fix_inside) what.push('纠正 /整理 内错误归类');
+  what.push('完成后自动重扫+分类');
   if (!confirm('确认：' + what.join('；') + '？\n（删除均为移入回收站，可恢复）')) return;
   const msg = document.getElementById('org-msg');
   const fill = document.getElementById('org-fill');
