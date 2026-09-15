@@ -21,7 +21,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlparse
 
-from . import categories, classify, dedupe, organize, util
+from . import categories, classify, dedupe, organize, screenshots, util
 
 
 class _FastHTTPServer(ThreadingHTTPServer):
@@ -1550,12 +1550,32 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     by_id = {v["id"]: v for v in videos}
     resume_index = _resume_index(videos)
 
+    def _load_page_videos() -> list:
+        """Rebuild the page dataset from disk so refresh reflects the latest
+        scan / classify / organize result."""
+        vids = util.read_json(util.VIDEOS_FILE) or dataset
+        recs = {c["id"]: c for c in (util.read_json(util.CLASSIFIED_FILE) or [])}
+        manual = classify.load_manual()
+        needed = len(util.load_config().get("fractions", []))
+        out = []
+        for v in vids:
+            cid = v.get("id")
+            rec = recs.get(cid) or {}
+            auto = rec.get("auto_category") or rec.get("category") or "unknown"
+            vv = dict(v)
+            vv["auto_category"] = auto
+            vv["category"] = manual.get(cid, rec.get("category", auto))
+            vv["manual"] = cid in manual
+            vv["thumbs"] = screenshots.disk_thumbs(cid, needed) if needed else []
+            out.append(vv)
+        return out
+
     def render_index() -> str:
-        """Rebuild the page so a normal refresh reflects the latest selections."""
+        """Rebuild the page so a normal refresh reflects the latest data."""
         saved = util.read_json(util.SELECTIONS_FILE, {}) or {}
         sel = [i for i in (saved.get("delete") or []) if i in by_id]
         prog = util.read_json(util.REVIEW_PROGRESS_FILE, {}) or {}
-        return build_html(dataset, resume_index, sel, prog.get("id") or "")
+        return build_html(_load_page_videos(), -1, sel, prog.get("id") or "")
 
     submitted: dict = {"done": False, "selections": None}
     httpd_holder: dict = {}

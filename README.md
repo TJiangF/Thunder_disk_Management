@@ -205,6 +205,7 @@ cd /Users/tf/thunder_video_sweeper
 - 移动是异步任务：工具会**等待任务完成**、遇“任务数超限”自动退避重试、失败转逐个重试；重复执行会**自动跳过已在目标**的文件。
 - 已在回收站的文件会跳过（`file_move_from_recycle_bin`）。
 - 网页“整理”页可预览方案；执行记录：`data/organize_applied.json`、`data/organize_clean.json`。
+- **刷新即最新**：页面每次刷新都会从磁盘重新加载 `videos.json/classified.json` 与手动分类，所以重扫/分类/整理后**普通刷新**就能看到真实路径与分类（无需重启服务）。
 - 想重做整盘整理前，建议先重新扫描以刷新 `data/files.json`：`rm -f data/scan_state.json && ./sweeper scan && ./sweeper classify`。
 
 ### 3.7 删除（移入回收站）
