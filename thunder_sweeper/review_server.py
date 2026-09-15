@@ -609,7 +609,16 @@ function renderOrganize() {
   h += '<p class="stat">待移动 <b>' + s.move_count + '</b> 个 / ' + fmtSize(s.move_size) +
        '　将删除文件夹 <b>' + s.delete_folder_count + '</b>（顺带清理小文件 ' +
        s.delete_extra_count + ' 个 / ' + fmtSize(s.delete_extra_size) + '）　保留文件夹 <b>' +
-       s.keep_folder_count + '</b></p>';
+       s.keep_folder_count + '</b>　路径与分类不一致 <b>' + (s.mismatch_count || 0) + '</b></p>';
+  let mm = '';
+  (p.mismatches || []).slice(0, 300).forEach(m => {
+    mm += '<div class="sel-row"><div class="grow">' + esc(m.name) +
+          '<div class="sub">' + esc(m.from) + ' → ' + esc(m.to) + '</div></div><div>' + fmtSize(m.size) + '</div></div>';
+  });
+  if ((p.mismatches || []).length > 300) mm += '<p class="stat">…仅显示前 300 个</p>';
+  h += '<details' + ((p.mismatches || []).length ? ' open' : '') + '><summary>路径与分类不一致 ' +
+       (p.mismatches || []).length + ' 个（勾选“纠正 /整理 内错误归类”后执行会移动它们）</summary>' +
+       (mm || '<p class="stat">无</p>') + '</details>';
   let tg = '';
   for (const k in s.targets) {
     tg += '<div class="sel-row"><div class="grow">' + esc(p.base) + '/' + esc(k) +

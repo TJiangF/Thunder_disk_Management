@@ -71,6 +71,7 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
 
     moves = []
     moved_ids = set()
+    mismatches = []          # files already inside base whose path != their category
     for f in sorted(files, key=lambda x: int(x.get("size") or 0), reverse=True):
         if f.get("kind") == "drive#folder":
             continue
@@ -86,10 +87,19 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
             continue
         src = f.get("path") or "/"
         target = f"{base}/{'/'.join(names)}"
-        if src == target or src.startswith(target + "/"):
-            continue  # already in the right place
-        if under_base(src) and not fix_inside:
-            continue  # already inside the organize tree; don't shuffle it
+        in_place = (src == target) or src.startswith(target + "/")
+        if src.startswith(base + "/") or src == base:
+            if not in_place:
+                mismatches.append({
+                    "id": f.get("id"), "name": f.get("name"), "from": src, "to": target,
+                    "size": int(f.get("size") or 0), "category": c,
+                })
+            if not in_place and fix_inside:
+                pass  # fall through to build a move
+            else:
+                continue
+        elif in_place:
+            continue
         name = f.get("name") or f.get("id")
         stem, ext = _split_ext(name)
         cand, k = name, 2
@@ -144,6 +154,7 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
     return {
         "base": base,
         "moves": moves,
+        "mismatches": mismatches,
         "by_target": {k: v for k, v in sorted(by_target.items())},
         "delete_folders": delete_folders,
         "keep_folders": keep_folders,
@@ -156,6 +167,8 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
             "delete_extra_count": sum(d["extra_removed"] for d in delete_folders),
             "delete_extra_size": sum(d["extra_size"] for d in delete_folders),
             "keep_folder_count": len(keep_folders),
+            "mismatch_count": len(mismatches),
+            "mismatch_size": sum(m["size"] for m in mismatches),
             "small_mb": small_mb, "large_mb": large_mb,
         },
     }

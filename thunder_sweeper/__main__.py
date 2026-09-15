@@ -498,6 +498,8 @@ def cmd_organize(args, cfg):
     util.log(f"将删除文件夹 {s['delete_folder_count']} 个"
              f"（顺带清理小文件/种子 {s['delete_extra_count']} 个 / {util.human_size(s['delete_extra_size'])}）")
     util.log(f"保留文件夹 {s['keep_folder_count']} 个（含较大的其他文件）")
+    util.log(f"路径与分类不一致 {s.get('mismatch_count', 0)} 个 / {util.human_size(s.get('mismatch_size', 0))}"
+             "（勾选“纠正”或加 --fix-inside 才会移动）")
 
     if not args.apply and not args.clean_junk:
         util.log("这是预览。确认无误后加 --apply 执行；测试可加 --limit N 只移动前 N 个")
