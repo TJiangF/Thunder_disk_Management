@@ -413,5 +413,8 @@ rm -rf data/thumbs data/queue.json data/shots_state.json
 **Q：点“▶ 播放”没反应 / 变成下载？**
 “▶ 播放”是**页内云播**（弹层 `<video>`）；“⬇ 下载”才会下载到本地。若播放无反应，确认 `./sweeper status` 已登录并重开 `./sweeper review`（未登录时播放只读不到直链）。
 
+**Q：整理/移动/建目录报 `captcha_invalid`（验证码无效）？**
+迅雷的 `captcha_token` 是**按接口动作绑定**的（形如 `post:/drive/v1/files:batchMove`）。工具已按每个请求自动申请对应 action 的 token，并在失效时自动重申请重试，直接重跑即可；若仍报错，重新 `./sweeper login` 刷新一次凭据。
+
 **Q：想彻底重来一遍？**
 见 **第 6 节 D**：删 `data/` 与 `.chrome-profile/` 后 `./sweeper login --restart` 重新开始。

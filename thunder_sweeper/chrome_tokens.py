@@ -456,15 +456,30 @@ class TokenProvider:
         self.save()
 
     # -- captcha token ----------------------------------------------------- #
-    def captcha_token(self) -> str:
-        if self._valid("captcha.expires_at", 30) and self.get("captcha.token"):
-            return self.store["captcha.token"]
-        with self._lock:
-            if self._valid("captcha.expires_at", 30) and self.get("captcha.token"):
-                return self.store["captcha.token"]
-            return self._init_captcha()
+    # 迅雷的 captcha_token 是按「方法:路径」这个 action 绑定的，写操作
+    # （移动/新建目录/改名/删除）必须用对应 action 申请，否则会 captcha_invalid。
+    DEFAULT_ACTION = "get:/drive/v1/tasks"
 
-    def _init_captcha(self) -> str:
+    def _tokens(self) -> dict:
+        return self.store.setdefault("captcha.tokens", {})
+
+    def captcha_token(self, action: str | None = None) -> str:
+        action = action or self.DEFAULT_ACTION
+        cached = self._tokens().get(action) or {}
+        if int(cached.get("expires_at", 0)) > int(time.time()) + 30 and cached.get("token"):
+            return cached["token"]
+        with self._lock:
+            cached = self._tokens().get(action) or {}
+            if int(cached.get("expires_at", 0)) > int(time.time()) + 30 and cached.get("token"):
+                return cached["token"]
+            return self._init_captcha(action)
+
+    def invalidate_captcha(self, action: str | None = None) -> None:
+        """Drop the cached token so the next call re-inits it."""
+        self._tokens().pop(action or self.DEFAULT_ACTION, None)
+
+    def _init_captcha(self, action: str | None = None) -> str:
+        action = action or self.DEFAULT_ACTION
         client_id = self.get("captcha.client_id")
         device_id = self.get("captcha.device_id")
         if not client_id or not device_id:
@@ -474,9 +489,9 @@ class TokenProvider:
         if not client_id or not device_id:
             raise TokenError("缺少 client_id / device_id，无法获取 captcha_token，请重新 login")
 
-        util.log("正在更新 captcha_token...")
+        util.log(f"正在更新 captcha_token（action={action}）...")
         body = {
-            "action": "get:/drive/v1/tasks",
+            "action": action,
             "client_id": client_id,
             "device_id": device_id,
             "meta": {
@@ -500,14 +515,21 @@ class TokenProvider:
                              timeout=self.cfg["request_timeout"])
         data = resp.json()
         if "captcha_token" not in data:
-            raise TokenError(f"获取 captcha_token 失败: {data}")
-        self.store["captcha.token"] = data["captcha_token"]
-        self.store["captcha.expires_at"] = int(time.time()) + int(data.get("expires_in", 300))
+            raise TokenError(f"获取 captcha_token 失败（action={action}）: {data}")
+        token = data["captcha_token"]
+        self._tokens()[action] = {
+            "token": token,
+            "expires_at": int(time.time()) + int(data.get("expires_in", 300)),
+        }
+        # 兼容旧字段（默认 action）
+        if action == self.DEFAULT_ACTION:
+            self.store["captcha.token"] = token
+            self.store["captcha.expires_at"] = self._tokens()[action]["expires_at"]
         self.save()
-        util.log("captcha_token 已更新")
-        return data["captcha_token"]
+        util.log(f"captcha_token 已更新（action={action}）")
+        return token
 
-    def headers(self) -> dict:
+    def headers(self, action: str | None = None) -> dict:
         return {
             "Authorization": "Bearer " + self.access_token(),
             "Origin": "https://pan.xunlei.com",
@@ -516,7 +538,7 @@ class TokenProvider:
             "content-type": "application/json",
             "x-client-id": self.get("captcha.client_id", ""),
             "x-device-id": self.get("captcha.device_id", ""),
-            "x-captcha-token": self.captcha_token(),
+            "x-captcha-token": self.captcha_token(action),
         }
 
     def _valid(self, key: str, leeway: int) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from urllib.parse import urlsplit
 
 import requests
 
@@ -39,11 +40,18 @@ class ThunderAPI:
         self.session = requests.Session()
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _action(method: str, url: str) -> str:
+        """迅雷 captcha 的 action 格式：``方法:路径``（小写方法、不含查询串）。"""
+        path = urlsplit(url).path or "/"
+        return f"{method.lower()}:{path}"
+
     def _request(self, method: str, url: str, *, params=None, data=None, max_retries=None):
         retries = max_retries or self.cfg["api_retries"]
+        action = self._action(method, url)
         last_exc = None
         for attempt in range(1, retries + 1):
-            headers = self.provider.headers()
+            headers = self.provider.headers(action)
             try:
                 resp = self.session.request(
                     method, url, headers=headers, params=params, data=data,
@@ -60,6 +68,10 @@ class ThunderAPI:
                 continue
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 self._backoff(attempt, f"HTTP {resp.status_code}")
+                continue
+            if resp.status_code == 400 and attempt < retries and "captcha_invalid" in resp.text:
+                util.log(f"captcha 失效（{action}），重新申请后重试", "WARN")
+                self.provider.invalidate_captcha(action)
                 continue
             if resp.status_code >= 400:
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
