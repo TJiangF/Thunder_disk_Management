@@ -177,6 +177,19 @@ def _keywords(base: list[str], cat: str, rules: dict) -> list[str]:
     return list(base) + list((rules.get("extra") or {}).get(cat, []))
 
 
+def default_keywords(cid: str) -> list:
+    """Built-in keywords for a base category (shown in the editor)."""
+    if cid == "jp":
+        return list(dict.fromkeys(list(JP_STUDIO_PREFIXES) + list(JP_DOMAIN_PREFIXES) + list(JP_KEYWORDS)))
+    if cid == "cn":
+        return list(dict.fromkeys(list(CN_CODE_PREFIXES) + list(CN_KEYWORDS)))
+    if cid == "west":
+        return list(WEST_KEYWORDS)
+    if cid == "non_adult":
+        return list(NON_ADULT_KEYWORDS)
+    return []
+
+
 def _kw_hit(label: str, base: list, extra: list | None) -> bool:
     for kw in base:
         if kw.lower() in label:

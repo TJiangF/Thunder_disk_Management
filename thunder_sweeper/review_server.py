@@ -288,6 +288,7 @@ const VIDEOS = __VIDEOS_JSON__;
 let LABELS = __LABELS_JSON__;
 let COLORS = __COLORS_JSON__;
 let CATEGORIES = __CATEGORIES_JSON__;
+let CAT_DEFAULTS = __CAT_DEFAULTS_JSON__;
 const RESUME_INDEX = __RESUME_INDEX__;
 const RESUME_ID = __RESUME_ID__;
 const RULES = __RULES_JSON__;
@@ -626,6 +627,7 @@ function applyCats(data) {
   CATEGORIES = data.categories || CATEGORIES;
   LABELS = data.labels || LABELS;
   COLORS = data.colors || COLORS;
+  CAT_DEFAULTS = data.defaults || CAT_DEFAULTS;
   CATS = CATEGORIES.map(c => c.id);
   const valid = new Set(CATS);
   for (const c of [...activeCats]) if (!valid.has(c)) activeCats.delete(c);
@@ -643,11 +645,13 @@ function renderCatsEditor() {
   const box = document.getElementById('cat-editor');
   if (!box) return;
   box.innerHTML = CATEGORIES.map(c => {
-    const kws = (RULES.extra && RULES.extra[c.id]) || [];
+    const custom = (RULES.extra && RULES.extra[c.id]) || null;
+    const builtin = CAT_DEFAULTS[c.id] || [];
+    const kws = (custom && custom.length) ? custom : builtin;
     const open = kwOpen.has(c.id);
+    const badge = kws.length ? (' <span class="badge">' + kws.length + ' 关键词' + ((!custom || !custom.length) && builtin.length ? '·内置' : '') + '</span>') : '';
     let h = '<div class="sel-row" style="padding-left:' + (c.depth * 18) + 'px">' +
-      '<div class="grow">' + esc(c.name) +
-        (kws.length ? ' <span class="badge">' + kws.length + ' 关键词</span>' : '') + '</div>' +
+      '<div class="grow">' + esc(c.name) + badge + '</div>' +
       '<button onclick="toggleKw(\'' + c.id + '\')">' + (open ? '收起' : '关键词') + '</button>' +
       '<button onclick="addCat(\'' + c.id + '\')">＋子类</button>' +
       '<button onclick="renameCat(\'' + c.id + '\')">改名</button>' +
@@ -655,7 +659,9 @@ function renderCatsEditor() {
     '</div>';
     if (open) {
       h += '<div style="padding:4px 0 10px ' + (c.depth * 18 + 8) + 'px">' +
-        '<textarea id="kw-' + c.id + '" spellcheck="false" style="width:100%;height:140px;background:#0f1115;color:#e6e8eb;border:1px solid #2a2e35;border-radius:8px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace">' +
+        (builtin.length && (!custom || !custom.length)
+          ? '<div class="stat" style="margin-bottom:4px">当前为内置关键词，可增删后保存（保存后以你的列表为准）</div>' : '') +
+        '<textarea id="kw-' + c.id + '" spellcheck="false" style="width:100%;height:160px;background:#0f1115;color:#e6e8eb;border:1px solid #2a2e35;border-radius:8px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace">' +
           esc(kws.join('\n')) + '</textarea>' +
         '<div style="margin-top:6px">' +
           '<button class="primary" onclick="saveKeywords(\'' + c.id + '\')">保存关键词并重新分类</button> ' +
@@ -1327,7 +1333,9 @@ def cats_payload() -> dict:
             h = int(hashlib.md5(str(cid).encode()).hexdigest(), 16) % 360
             r, g, b = colorsys.hsv_to_rgb(h / 360.0, 0.55, 0.85)
             colors[cid] = "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
-    return {"categories": flat, "labels": {x["id"]: x["name"] for x in flat}, "colors": colors}
+    defaults = {cid: classify.default_keywords(cid) for cid in ("jp", "cn", "west", "non_adult")}
+    return {"categories": flat, "labels": {x["id"]: x["name"] for x in flat},
+            "colors": colors, "defaults": defaults}
 
 
 def build_html(videos: list[dict], resume_index: int = -1,
@@ -1350,6 +1358,7 @@ def build_html(videos: list[dict], resume_index: int = -1,
     html = html.replace("__LABELS_JSON__", json.dumps(payload["labels"], ensure_ascii=False))
     html = html.replace("__COLORS_JSON__", json.dumps(payload["colors"], ensure_ascii=False))
     html = html.replace("__CATEGORIES_JSON__", json.dumps(payload["categories"], ensure_ascii=False))
+    html = html.replace("__CAT_DEFAULTS_JSON__", json.dumps(payload["defaults"], ensure_ascii=False))
     html = html.replace("__RULES_JSON__", json.dumps(classify.load_user_rules(), ensure_ascii=False))
     html = html.replace("__SELECTED_JSON__", json.dumps(selected_ids or [], ensure_ascii=False))
     html = html.replace("__RESUME_ID__", json.dumps(resume_id or ""))
