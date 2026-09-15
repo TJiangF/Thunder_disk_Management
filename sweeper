@@ -1,0 +1,4 @@
+#!/bin/sh
+# 用项目自带的虚拟环境运行，避免用错 Python 解释器。
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/.venv/bin/python" -m thunder_sweeper "$@"
