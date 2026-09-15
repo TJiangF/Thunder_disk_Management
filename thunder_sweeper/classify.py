@@ -190,14 +190,27 @@ def default_keywords(cid: str) -> list:
     return []
 
 
-def _kw_hit(label: str, base: list, extra: list | None) -> bool:
-    for kw in base:
-        if kw.lower() in label:
-            return True
-    for kw in (extra or []):
-        if str(kw).strip().lower() in label:
+def _kw_hit(label: str, tokens: list | None) -> bool:
+    """Keyword match.
+
+    - letters-only keywords require letter boundaries (``jul`` won't match
+      ``julesjordan``, but ``aavv`` still matches ``aavv121.com``);
+    - keywords with digits / dots / CJK match as plain substrings.
+    """
+    for kw in tokens or []:
+        t = str(kw).strip()
+        if not t:
+            continue
+        tl = t.lower()
+        if re.fullmatch(r"[a-z]+", tl):
+            if re.search(r"(?<![a-z])" + re.escape(tl) + r"(?![a-z])", label):
+                return True
+        elif tl in label:
             return True
     return False
+
+
+BASE_ORDER = {"cn": 0, "jp": 1, "west": 2, "non_adult": 3, "adult_other": 4, "unknown": 5}
 
 
 _BASE_CACHE: list = []
@@ -222,8 +235,14 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
     if rules is None:
         rules = load_user_rules()
 
-    label = f"{path} {name}".lower()
-    upper = f"{path} {name}"
+    base = _organize_base()
+    p = path or "/"
+    under_base = (p == base) or p.startswith(base + "/")
+    # for files already inside the organize tree, only the file name matters
+    # (otherwise the category name in the path would feed back into matching)
+    scope = (name or "") if under_base else f"{p} {name or ''}"
+    label = scope.lower()
+    upper = scope
     extra = rules.get("extra") or {}
 
     # non-video / document / archive files are not adult movies
@@ -238,9 +257,6 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
 
     # explicit folder hints (ignore the organize target tree, whose names are
     # themselves derived from categories)
-    base = _organize_base()
-    p = path or "/"
-    under_base = (p == base) or p.startswith(base + "/")
     if not under_base:
         if re.search(r"(日本|jav|日系)", label):
             return "jp", "folder/jp-hint"
@@ -249,44 +265,51 @@ def classify(name: str, path: str = "", rules: dict | None = None) -> tuple[str,
         if re.search(r"(国产|国产自拍|华语|中文)", label):
             return "cn", "folder/cn-hint"
 
-    # category keywords: deepest sub-categories first, then parents
+    # category keywords: deepest sub-categories first; then top-level in
+    # fixed order (国产 → 日本 → 欧美 → 非成人 → …), user categories last.
     nodes = categories.flat()
-    order = sorted(nodes, key=lambda x: -x.get("depth", 0))
+    subs = [x for x in nodes if x.get("depth", 0) > 0]
+    subs.sort(key=lambda x: -x.get("depth", 0))
+    tops_core = [x for x in nodes if x.get("depth", 0) == 0 and x.get("id") in BASE_ORDER]
+    tops_core.sort(key=lambda x: BASE_ORDER.get(x.get("id"), 99))
+    tops_custom = [x for x in nodes if x.get("depth", 0) == 0 and x.get("id") not in BASE_ORDER]
+    order = subs + tops_core + tops_custom
+
     for node in order:
         cid = node.get("id")
         custom = bool(extra.get(cid))
         if cid == "jp":
             if custom:
-                if _kw_hit(label, [], extra.get("jp")):
+                if _kw_hit(label, extra.get("jp")):
                     return "jp", "jp-kw"
             elif _has_code(upper, set(JP_STUDIO_PREFIXES)):
                 return "jp", "jp-code"
             elif any(d in label for d in JP_DOMAIN_PREFIXES):
                 return "jp", "jp-domain"
-            elif _kw_hit(label, JP_KEYWORDS, None):
+            elif _kw_hit(label, JP_KEYWORDS):
                 return "jp", "jp-kw"
         elif cid == "cn":
             if custom:
-                if _kw_hit(label, [], extra.get("cn")):
+                if _kw_hit(label, extra.get("cn")):
                     return "cn", "cn-kw"
             elif _has_code(upper, set(CN_CODE_PREFIXES)):
                 return "cn", "cn-code"
-            elif _kw_hit(label, CN_KEYWORDS, None):
+            elif _kw_hit(label, CN_KEYWORDS):
                 return "cn", "cn-kw"
         elif cid == "west":
             if custom:
-                if _kw_hit(label, [], extra.get("west")):
+                if _kw_hit(label, extra.get("west")):
                     return "west", "west-kw"
-            elif _kw_hit(label, WEST_KEYWORDS, None):
+            elif _kw_hit(label, WEST_KEYWORDS):
                 return "west", "west-kw"
         elif cid == "non_adult":
             if custom:
-                if _kw_hit(label, [], extra.get("non_adult")):
+                if _kw_hit(label, extra.get("non_adult")):
                     return "non_adult", "non-adult-kw"
-            elif _kw_hit(label, NON_ADULT_KEYWORDS, None):
+            elif _kw_hit(label, NON_ADULT_KEYWORDS):
                 return "non_adult", "non-adult-kw"
         else:
-            if _kw_hit(label, [], extra.get(cid)):
+            if _kw_hit(label, extra.get(cid)):
                 return cid, f"cat-kw:{cid}"
 
     # fallback: pure-latin multi-word titles -> western
