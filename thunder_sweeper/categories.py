@@ -36,6 +36,9 @@ def load_tree() -> list:
     tree = util.read_json(util.CATEGORIES_FILE)
     if not isinstance(tree, list) or not tree:
         return default_tree()
+    if not flat(tree):
+        # file exists but is unusable (all nodes malformed) -> fall back
+        return default_tree()
     return tree
 
 
@@ -48,8 +51,13 @@ def _walk(nodes, depth=0, parents=None, parent_id=None):
     for n in nodes:
         if not isinstance(n, dict):
             continue
+        cid = n.get("id")
+        name = n.get("name")
+        if not cid or not isinstance(cid, str) or not name:
+            # skip malformed nodes instead of leaking a None id downstream
+            continue
         yield n, depth, parents, parent_id
-        yield from _walk(n.get("children") or [], depth + 1, parents + [n.get("name")], n.get("id"))
+        yield from _walk(n.get("children") or [], depth + 1, parents + [name], cid)
 
 
 def flat(tree: list | None = None) -> list:

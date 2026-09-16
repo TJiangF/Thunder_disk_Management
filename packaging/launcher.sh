@@ -1,7 +1,7 @@
 #!/bin/sh
 # Double-clicked .app launcher: opens Terminal and runs the wizard menu.
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
-BIN="$RES/ThunderSweeper"
+BIN="$RES/ThunderSweeper/ThunderSweeper"
 if [ ! -x "$BIN" ]; then
     osascript -e 'display alert "ThunderSweeper" message "找不到内置程序，请重新解压安装包。"'
     exit 1

@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: builds the single-file ``ThunderSweeper`` CLI binary.
+"""PyInstaller spec: builds ``dist/ThunderSweeper/`` (a *onedir* bundle).
 
-The bundled binary embeds a static ffmpeg (from imageio-ffmpeg), so end users
-do not need Homebrew or any other install step.
+onedir is used on purpose: a onefile build must unpack the 47 MB embedded
+ffmpeg to a temp folder on every launch (~10 s startup).  A folder starts
+instantly, and end users still only see a single folder + .app.
 """
 
 import os
@@ -36,18 +37,25 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="ThunderSweeper",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="ThunderSweeper",
 )
