@@ -15,6 +15,7 @@ import errno
 import hashlib
 import json
 import socketserver
+import sys
 import threading
 import time
 import webbrowser
@@ -195,6 +196,7 @@ PAGE = r"""<!doctype html>
     <button onclick="selectAllCurrent()">全选本目录</button>
     <button onclick="clearSel()">清空选择</button>
     <button class="primary" onclick="submitSel()">提交删除</button>
+    <button class="danger" onclick="shutdownServer()" title="停止本地服务并退出">关闭服务</button>
   </div>
   <div class="row" style="margin-top:8px">
     <span class="stat">筛选：</span>
@@ -1091,6 +1093,19 @@ function _bindTableDrag() {
 }
 function clearSel() { selected.clear(); selectedFolders.clear(); render(); }
 
+/* ---------------- shutdown ---------------- */
+async function shutdownServer() {
+  if (!confirm('确定关闭本地管理服务？\\n\\n关闭后本页面将无法再操作，需要重新运行 review 才能打开。')) return;
+  try {
+    await fetch('/shutdown', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  } catch (e) { /* server may drop the connection immediately */ }
+  document.body.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:center;height:100vh;' +
+    'flex-direction:column;gap:12px;color:#9aa4b2">' +
+    '<div style="font-size:20px;color:#e6e8eb">服务已关闭</div>' +
+    '<div>可以关闭此标签页了。</div></div>';
+}
+
 /* ---------------- tooltip ---------------- */
 function bindTips() {
   document.querySelectorAll('.tm-node').forEach(el => {
@@ -1914,6 +1929,13 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 self._send(200, b'{"ok":true}', "application/json")
                 return
 
+            if path == "/shutdown":
+                self._send(200, b'{"ok":true}', "application/json")
+                shutdown = httpd_holder.get("shutdown")
+                if shutdown:
+                    threading.Timer(0.3, shutdown).start()
+                return
+
             if path == "/mark":
                 if data.get("clear"):
                     util.atomic_write_json(util.REVIEW_PROGRESS_FILE, {})
@@ -2155,10 +2177,20 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     url = f"http://127.0.0.1:{port}/"
     util.log(f"管家页面: {url}")
     util.log("文件管理=WizTree 框图；视频审核=缩略图勾选；待删除=网页“执行删除”或终端 apply")
+    util.log("关闭服务：点网页右上角「关闭服务」，或在终端按 Ctrl+C")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    def _shutdown():
+        util.log("收到关闭指令，正在停止服务…", "WARN")
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+
+    httpd_holder["shutdown"] = _shutdown
     try:
-        httpd.serve_forever()
+        httpd.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
         util.log("已中断", "WARN")
     finally:

@@ -171,19 +171,32 @@ def cmd_shots(args, cfg):
     total = sum(v.get("size", 0) for v in videos)
     util.log(f"准备为 {len(videos)} 个视频生成截图（共 {util.human_size(total)}），并发 {workers}")
 
-    def progress(i, total_n, video):
-        flag = "✓" if video.get("done") else "✗"
-        util.log(f"[{i}/{total_n}] {flag} {video.get('name')} ({util.human_size(video.get('size'))})")
+    counters = {"ok": 0, "fail": 0}
+    bar = util.ProgressBar(len(videos), label="")
 
+    def progress(i, total_n, video):
+        ok = bool(video.get("done"))
+        if ok:
+            counters["ok"] += 1
+        else:
+            counters["fail"] += 1
+        name = (video.get("name") or "")[:36]
+        flag = "✓" if ok else "✗"
+        bar.update(i, counters["ok"], counters["fail"], f"{flag} {name}")
+
+    bar.start()
     try:
         screenshots.process_many(provider, videos, cfg, workers=workers,
                                  progress=progress, on_done=on_done)
     except KeyboardInterrupt:
+        if bar._tty:
+            bar.stream.write("\n")
         util.atomic_write_json(util.QUEUE_FILE, videos)
         util.log("已中断，进度已保存", "WARN")
         raise
     finally:
         util.atomic_write_json(util.QUEUE_FILE, videos)
+    bar.finish()
 
     done = sum(1 for v in videos if v.get("done"))
     util.log(f"截图完成：{done}/{len(videos)} 个成功，结果: {util.QUEUE_FILE}")

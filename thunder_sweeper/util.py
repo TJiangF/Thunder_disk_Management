@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -266,3 +267,84 @@ def data_dir_display() -> str:
 
 def app_version() -> str:
     return APP_VERSION
+
+
+# --------------------------------------------------------------------------- #
+# interactive terminal helpers (progress bar, prompts, single-key listener)
+# --------------------------------------------------------------------------- #
+def prompt_int(question: str, default: int, minimum: int | None = None,
+               maximum: int | None = None, allow_blank: bool = True) -> int:
+    """Ask the user for an integer, clamped to [minimum, maximum]."""
+    hint = f"（默认 {default}"
+    if maximum is not None:
+        hint += f"，最大 {maximum}"
+    hint += "）"
+    while True:
+        raw = input(f"{question}{hint}: ").strip()
+        if not raw and allow_blank:
+            value = default
+        else:
+            try:
+                value = int(raw)
+            except ValueError:
+                print("  请输入数字。")
+                continue
+        if minimum is not None and value < minimum:
+            print(f"  不能小于 {minimum}。")
+            continue
+        if maximum is not None and value > maximum:
+            print(f"  不能大于 {maximum}。")
+            continue
+        return value
+
+
+class ProgressBar:
+    """Simple single-line progress bar (safe when stderr is not a tty)."""
+
+    def __init__(self, total: int, label: str = "", width: int = 28, stream=None):
+        self.total = max(0, int(total))
+        self.label = label
+        self.width = width
+        self.stream = stream or sys.stderr
+        self.done = 0
+        self.ok = 0
+        self.fail = 0
+        self._last_len = 0
+        self._tty = bool(getattr(self.stream, "isatty", lambda: False)())
+
+    def start(self) -> None:
+        self.update(0)
+
+    def update(self, done: int | None = None, ok: int | None = None,
+               fail: int | None = None, label: str | None = None) -> None:
+        if done is not None:
+            self.done = int(done)
+        if ok is not None:
+            self.ok = int(ok)
+        if fail is not None:
+            self.fail = int(fail)
+        if label is not None:
+            self.label = label
+        total = self.total or 1
+        frac = min(1.0, self.done / total)
+        filled = int(round(frac * self.width))
+        bar = "█" * filled + "░" * (self.width - filled)
+        head = f"{self.done}/{self.total}"
+        extra = f" ✓{self.ok}" + (f" ✗{self.fail}" if self.fail else "")
+        text = f"  [{bar}] {head}{extra}  {self.label}"
+        if self._tty:
+            pad = max(0, self._last_len - len(text))
+            self.stream.write("\r" + text + " " * pad)
+            self.stream.flush()
+            self._last_len = len(text)
+        else:
+            # non-tty: print a line only on completion
+            if self.done >= self.total:
+                self.stream.write(text.strip() + "\n")
+                self.stream.flush()
+
+    def finish(self) -> None:
+        self.update(self.total)
+        if self._tty:
+            self.stream.write("\n")
+            self.stream.flush()

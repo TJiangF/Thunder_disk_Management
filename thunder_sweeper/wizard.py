@@ -83,6 +83,24 @@ def _do_review(cfg) -> None:
     cli.cmd_review(_ns(port=_prompt_int("网页端口", 8765)), util.load_config())
 
 
+def _do_shots(cfg) -> None:
+    """Ask how many videos to screenshot and how many run in parallel."""
+    from . import __main__ as cli
+
+    cpu = util.cpu_count()
+    print(f"\n生成截图（每个视频 8 张，用于网页审核）")
+    print(f"  本机 CPU 线程数：{cpu}，并发不会超过这个值")
+    count = util.prompt_int("  截图数量（按大小从大到小）", 50, minimum=1)
+    default_workers = min(int(cfg.get("workers", 3) or 3), cpu)
+    workers = util.prompt_int("  并发数量", default_workers, minimum=1, maximum=cpu)
+    if workers > cpu:
+        workers = cpu
+    print(f"  → 将处理最大的 {count} 个视频，并发 {workers}\n")
+    cli.cmd_shots(_ns(top=count, more=None, all=False, ids=None, min_size=None,
+                      no_resume=False, retry_failed=False, workers=workers),
+                  util.load_config())
+
+
 def _require_login() -> bool:
     if _is_logged_in():
         return True
@@ -105,9 +123,7 @@ def _menu_once(cfg) -> bool:
         cli.cmd_classify(_ns(), util.load_config())
     elif choice == "4":
         if _require_login():
-            cli.cmd_shots(_ns(top=100, more=None, all=False, ids=None, min_size=None,
-                              no_resume=False, retry_failed=False, workers=None),
-                          util.load_config())
+            _do_shots(cfg)
     elif choice == "5":
         _do_review(cfg)
     elif choice == "6":

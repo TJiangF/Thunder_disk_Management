@@ -844,6 +844,81 @@ def test_failure_modes(r: Results) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_ui_helpers(r: Results) -> None:
+    r.section("交互助手（进度条 / 数值输入 / Esc 监听）")
+    import io
+
+    # ProgressBar on a non-tty must not raise and must print on completion
+    buf = io.StringIO()
+    bar = util.ProgressBar(5, label="test", stream=buf)
+    bar.start()
+    for i in range(1, 6):
+        bar.update(i, ok=i, fail=0, label=f"v{i}")
+    bar.finish()
+    r.check("进度条非 tty 下输出一行", "5/5" in buf.getvalue(), buf.getvalue())
+
+    # ProgressBar on a fake tty writes carriage returns
+    class FakeTTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    tty = FakeTTY()
+    bar = util.ProgressBar(3, stream=tty)
+    bar.start()
+    bar.update(1, label="a")
+    bar.update(3, label="b")
+    bar.finish()
+    r.check("进度条 tty 下使用 \\r 刷新", "\r" in tty.getvalue())
+    r.check("进度条显示百分比填充", "█" in tty.getvalue() and "░" in tty.getvalue())
+
+    # prompt_int: blank -> default, invalid -> re-ask, clamp
+    import builtins
+
+    saved_input = builtins.input
+    try:
+        answers = iter(["", "abc", "999", "4"])
+        builtins.input = lambda *a, **k: next(answers)
+        val = util.prompt_int("n", 50, minimum=1, maximum=util.cpu_count())
+        r.eq("非法输入后最终取合法值", val, 4)
+    finally:
+        builtins.input = saved_input
+
+
+def test_shutdown_endpoint(r: Results) -> None:
+    r.section("关闭服务（网页主动退出）")
+    from . import review_server
+
+    with isolated_home():
+        videos = [{"id": "V1", "name": "ABP-1.mp4", "path": "/", "size": 1,
+                   "category": "jp", "auto_category": "jp", "manual": False, "thumbs": []}]
+        util.atomic_write_json(util.VIDEOS_FILE, videos)
+        util.atomic_write_json(util.FILES_FILE, videos)
+        port = _free_port()
+        thread = threading.Thread(
+            target=review_server.serve,
+            kwargs={"videos": videos, "port": port, "open_browser": False}, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(60):
+            try:
+                _http("GET", base + "/")
+                break
+            except Exception:
+                time.sleep(0.2)
+        try:
+            status, j = _http("POST", base + "/shutdown", {})
+            r.check("POST /shutdown 返回 ok", status == 200 and j.get("ok") is True, str(j))
+        except Exception as exc:
+            r.check("POST /shutdown 返回 ok", False, str(exc))
+        thread.join(timeout=5)
+        r.check("服务线程已退出", not thread.is_alive())
+        try:
+            _http("GET", base + "/", timeout=2)
+            r.check("关闭后端口不再响应", False)
+        except Exception:
+            r.check("关闭后端口不再响应", True)
+
+
 def test_live(r: Results) -> None:
     r.section("live（真实迅雷 API 沙箱：只动自建测试文件夹）")
     from . import chrome_tokens
@@ -913,6 +988,7 @@ def run(live: bool = False) -> int:
         ("ffmpeg", test_ffmpeg_pipeline), ("screenshots", test_screenshots),
         ("review_server", test_review_server), ("review_http_edge", test_review_http_edge),
         ("failure_modes", test_failure_modes),
+        ("ui_helpers", test_ui_helpers), ("shutdown", test_shutdown_endpoint),
         ("request_retry", test_request_retry), ("cli", test_cli),
     ):
         r.run(name, lambda fn=fn: fn(r))
