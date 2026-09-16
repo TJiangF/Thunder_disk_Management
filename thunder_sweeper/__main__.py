@@ -173,7 +173,8 @@ def cmd_shots(args, cfg):
 
     counters = {"ok": 0, "fail": 0}
     use_live = sys.stderr.isatty()
-    live = util.LiveDisplay(len(videos), slots=workers, label="截图") if use_live else None
+    live = util.LiveDisplay(len(videos), slots=workers, label="截图",
+                            console_lines=6) if use_live else None
     bar = None if use_live else util.ProgressBar(len(videos), label="")
 
     def progress(i, total_n, video):

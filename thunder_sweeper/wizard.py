@@ -84,19 +84,24 @@ def _do_review(cfg) -> None:
 
 
 def _do_shots(cfg) -> None:
-    """Ask how many videos to screenshot and how many run in parallel."""
+    """Ask how many *additional* videos to screenshot and how many run in parallel."""
     from . import __main__ as cli
+    from . import screenshots
 
     cpu = util.cpu_count()
+    videos = util.read_json(util.VIDEOS_FILE) or []
+    needed = len(cfg.get("fractions") or [])
+    done = sum(1 for v in videos if screenshots.disk_thumbs(v.get("id"), needed))
     print(f"\n生成截图（每个视频 8 张，用于网页审核）")
+    print(f"  当前已截图 {done} 个 / 共 {len(videos)} 个视频")
     print(f"  本机 CPU 线程数：{cpu}，并发不会超过这个值")
-    count = util.prompt_int("  截图数量（按大小从大到小）", 50, minimum=1)
+    count = util.prompt_int("  本次新增截图数量（在已完成基础上继续）", 50, minimum=1)
     default_workers = min(int(cfg.get("workers", 3) or 3), cpu)
     workers = util.prompt_int("  并发数量", default_workers, minimum=1, maximum=cpu)
     if workers > cpu:
         workers = cpu
-    print(f"  → 将处理最大的 {count} 个视频，并发 {workers}\n")
-    cli.cmd_shots(_ns(top=count, more=None, all=False, ids=None, min_size=None,
+    print(f"  → 在已完成 {done} 个的基础上，再截图 {count} 个，并发 {workers}\n")
+    cli.cmd_shots(_ns(top=count, more=count, all=False, ids=None, min_size=None,
                       no_resume=False, retry_failed=False, workers=workers),
                   util.load_config())
 

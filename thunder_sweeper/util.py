@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -358,24 +359,32 @@ class LiveDisplay:
         [██████░░░░░░░░] 12/50 ✓10 ✗2  截图
           文件名A.mp4              截图 3/8
           文件名B.mp4              取直链
+          ── 日志 ──
+          [警告] xxx 第 4/8 张超时
 
-    The block has a fixed height and is redrawn in place (no scrolling) on every
-    update and from a background ticker, so the terminal stays calm.  When
+    The top line is the overall progress bar; the next ``slots`` lines are one
+    per worker, showing the file it is currently working on; below them a fixed
+    console window keeps the most recent ``console_lines`` debug/exception
+    messages (auto-scrolling).  The whole block is redrawn in place on every
+    update and from a background ticker, so the terminal never scrolls.  When
     ``stream`` is not a tty it stays silent and only prints on :meth:`finish`.
     """
 
     def __init__(self, total: int, slots: int = 1, label: str = "",
-                 width: int = 28, stream=None, interval: float = 0.4):
+                 width: int = 28, console_lines: int = 6, stream=None,
+                 interval: float = 0.4):
         self.total = max(0, int(total))
         self.slots = max(0, int(slots))
         self.label = label
         self.width = width
+        self.console_lines = max(0, int(console_lines))
         self.stream = stream or sys.stderr
         self.interval = max(0.05, float(interval))
         self.done = 0
         self.ok = 0
         self.fail = 0
         self.tasks: list[str] = []
+        self._console = deque(maxlen=self.console_lines) if self.console_lines else None
         self._lock = threading.RLock()
         self._drawn = 0
         self._tty = bool(getattr(self.stream, "isatty", lambda: False)())
@@ -405,6 +414,16 @@ class LiveDisplay:
     def set_tasks(self, tasks) -> None:
         with self._lock:
             self.tasks = [str(t) for t in tasks]
+            self._render_locked()
+
+    def console(self, message: str) -> None:
+        """Append a debug/exception line to the scrolling console area."""
+        line = f"{datetime.now().strftime('%H:%M:%S')}  {message}"
+        with self._lock:
+            if not self._tty or self._console is None:
+                print(line, file=self.stream, flush=True)
+                return
+            self._console.append(line)
             self._render_locked()
 
     def log(self, message: str) -> None:
@@ -450,10 +469,16 @@ class LiveDisplay:
 
     def _lines(self) -> list[str]:
         cols = shutil.get_terminal_size((100, 24)).columns
+        limit = max(0, cols - 1)
         lines = [self._summary()]
         for i in range(self.slots):
             text = self.tasks[i] if i < len(self.tasks) else ""
-            lines.append(("  " + text)[: max(0, cols - 1)] if text else "")
+            lines.append(("  " + text)[:limit] if text else "")
+        if self.console_lines:
+            lines.append(("  ── 日志 ──")[:limit])
+            msgs = list(self._console) if self._console is not None else []
+            for j in range(self.console_lines):
+                lines.append(("  " + str(msgs[j]))[:limit] if j < len(msgs) else "")
         return lines
 
     def _render_locked(self) -> None:

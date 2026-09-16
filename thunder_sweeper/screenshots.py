@@ -194,6 +194,8 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
     order: list = []
     inflight_lock = threading.Lock()
     stop = threading.Event()
+    if live is not None:
+        live.console(f"开始截图：目标 {len(videos)} 个，并发 {workers}")
 
     def get_api():
         api = getattr(local, "api", None)
@@ -228,11 +230,12 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
         try:
             process_video(get_api(), video, cfg, resume=True,
                           verbose=(workers == 1 and live is None),
-                          status=(report if live is not None else None))
+                          status=(report if live is not None else None),
+                          debug=(live.console if live is not None else None))
         except Exception as exc:
             video["error"] = str(exc)
             if live is not None:
-                live.log(f"[{name}] 处理异常: {exc}")
+                live.console(f"[{name}] 处理异常: {exc}")
             else:
                 util.log(f"[{name}] 处理异常: {exc}", "ERROR")
         finally:
@@ -305,10 +308,16 @@ def _fresh_url(api, file_id: str, cfg: dict) -> str:
 
 def process_video(api, video: dict, cfg: dict, resume: bool = True,
                   fractions: list[float] | None = None, verbose: bool = True,
-                  status=None) -> dict:
+                  status=None, debug=None) -> dict:
     from . import thunder_api
 
     def say(message, level="INFO"):
+        if level in ("WARN", "ERROR") and debug is not None:
+            try:
+                debug(message)
+            except Exception:
+                pass
+            return
         if verbose:
             util.log(message, level)
 
@@ -438,6 +447,7 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
     video["done"] = len(thumbs) > 0
     if len(thumbs) < needed:
         video["error"] = f"仅生成 {len(thumbs)}/{needed} 张截图"
+        say(f"[{name}] {video['error']}", "WARN")
     else:
         video["error"] = None
     return video
