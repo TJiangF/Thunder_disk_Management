@@ -15,10 +15,16 @@
 6. **一键移入回收站**（可恢复，不会永久删除）；`organize` 支持**真正执行移动/清理**。
 
 > 路径：`/Users/tf/thunder_video_sweeper`
+>
+> **想直接分发给别人用？** 见 [5.5 打包发布](#55-打包发布--直接分发给别人用重点)：`./build.sh` 产出免安装的 `.app` + 可执行程序（内置 ffmpeg）。
 
 ---
 
 ## 0. 快速开始（TL;DR）
+
+**最省事（打包版）**：双击 `迅雷云盘整理助手.app`，按菜单 1→2→3→4→5 走。
+
+**源码版**：
 
 ```bash
 cd /Users/tf/thunder_video_sweeper
@@ -30,6 +36,8 @@ cd /Users/tf/thunder_video_sweeper
 ./sweeper review              # 打开管家页面，浏览/筛选/勾选
 ./sweeper apply               # 回终端执行删除（移入回收站）
 ```
+
+不带参数运行 `./sweeper` 会进入**交互式菜单**；`./sweeper selftest` 可自检。
 
 ---
 
@@ -71,6 +79,9 @@ cd /Users/tf/thunder_video_sweeper
 | `./sweeper inspect <序号或id>` | 打印某视频 `file_info` 与 Range 测试（排查直链） |
 | `./sweeper review [--port PORT]` | 打开本地管家页面（默认 8765，占用自动顺延） |
 | `./sweeper apply [--dry-run] [--yes]` | 执行删除（移入回收站）；`--dry-run` 只预览 |
+| `./sweeper wizard` | 交互式菜单（不带参数运行时自动进入） |
+| `./sweeper selftest [--live]` | 内置自检；`--live` 额外做真实接口沙箱测试（只动自建的临时文件夹） |
+| `./sweeper --version` | 显示版本号 |
 
 各命令都可加 `-h` 看详细参数，例如 `./sweeper shots -h`。
 
@@ -284,6 +295,68 @@ cd /Users/tf/thunder_video_sweeper
     review_progress.json  review 的进度标记
     applied.json          apply 的执行结果
 ```
+
+---
+
+## 5.5 打包发布 / 直接分发给别人用（重点）
+
+不装 Python、不装 ffmpeg，别人拿到就能用。
+
+### 构建
+
+```bash
+cd /Users/tf/thunder_video_sweeper
+./build.sh
+```
+
+产物在 `dist/`（onedir 打包，启动约 0.15 秒）：
+
+| 产物 | 说明 |
+| --- | --- |
+| `dist/ThunderSweeper/` | 绿色目录，里面的 `ThunderSweeper` 就是可执行程序 |
+| `dist/迅雷云盘整理助手.app` | 双击运行：自动开终端并进入菜单向导 |
+| `dist/ThunderSweeper-1.0.0-macos.zip` | **对外分发的压缩包**（含上面两者） |
+
+> 内置了静态 `ffmpeg`（来自 `imageio-ffmpeg`），用户无需 `brew install ffmpeg`。
+> 打包用 onedir 而非 onefile：onefile 每次启动要把内置 ffmpeg 解包到临时目录，**要多等约 10 秒**。
+
+### 别人怎么用
+
+1. 解压 `ThunderSweeper-1.0.0-macos.zip`。
+2. 双击 **`迅雷云盘整理助手.app`** → 打开终端菜单（首次会被 macOS 拦一下：右键 → 打开，或「系统设置 → 隐私与安全性 → 仍要打开」）。
+3. 菜单选 `[1] 登录迅雷云盘`，在弹出的 Chrome 里登录一次。
+4. 依次 `[2] 扫描云盘` → `[3] 自动分类` → `[4] 生成截图` → `[5] 打开管理网页`。
+
+也可以直接用命令行（和源码版参数完全一致）：
+
+```bash
+./dist/ThunderSweeper/ThunderSweeper --help
+./dist/ThunderSweeper/ThunderSweeper login
+./dist/ThunderSweeper/ThunderSweeper selftest        # 自检
+./dist/ThunderSweeper/ThunderSweeper selftest --live # 含真实接口沙箱测试
+```
+
+### 数据放在哪里
+
+- **源码运行**：`项目根目录/data/`（与旧版一致）。
+- **打包运行**：`~/Library/Application Support/ThunderSweeper/data/`（`.app` 内部只读，不能写自己的包）。
+- 想强制指定目录：设环境变量 `THUNDER_SWEEPER_HOME=/path/to/dir`。
+- 想在别处放浏览器配置/缓存，也支持 `THUNDER_SWEEPER_CHROME` 指定浏览器可执行文件。
+
+### 每台机器的前置条件
+
+- macOS 11+，Apple Silicon（本机构建为 arm64）。
+- 装有 Chromium 系浏览器之一：**Chrome / Edge / Brave / Chromium**（会自动探测；也可在 `config.json` 指定 `chrome_path`）。
+  > 首次登录需要用户在弹出的浏览器里手动登录一次（迅雷没有公开的账号密码登录接口）。
+
+### 自检
+
+```bash
+./dist/ThunderSweeper/ThunderSweeper selftest         # 136 项离线自检
+./dist/ThunderSweeper/ThunderSweeper selftest --live  # 额外 7 项真实 API 沙箱（会建/删自己的临时文件夹）
+```
+
+`--live` 会真实调用迅雷接口：创建 `/_sweeper_selftest_*` 文件夹、改名、移动、删除，**只动它自己创建的测试文件夹，绝不碰你的文件**。
 
 ---
 
