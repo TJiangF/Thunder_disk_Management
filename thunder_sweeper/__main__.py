@@ -172,34 +172,49 @@ def cmd_shots(args, cfg):
     util.log(f"准备为 {len(videos)} 个视频生成截图（共 {util.human_size(total)}），并发 {workers}")
 
     counters = {"ok": 0, "fail": 0}
-    bar = util.ProgressBar(len(videos), label="")
+    use_live = sys.stderr.isatty()
+    live = util.LiveDisplay(len(videos), slots=workers, label="截图") if use_live else None
+    bar = None if use_live else util.ProgressBar(len(videos), label="")
 
     def progress(i, total_n, video):
         ok = bool(video.get("done"))
-        if ok:
-            counters["ok"] += 1
+        counters["ok" if ok else "fail"] += 1
+        if live is not None:
+            live.set_progress(i, counters["ok"], counters["fail"])
         else:
-            counters["fail"] += 1
-        name = (video.get("name") or "")[:36]
-        flag = "✓" if ok else "✗"
-        bar.update(i, counters["ok"], counters["fail"], f"{flag} {name}")
+            name = (video.get("name") or "")[:36]
+            flag = "✓" if ok else "✗"
+            bar.update(i, counters["ok"], counters["fail"], f"{flag} {name}")
 
-    bar.start()
+    if live is not None:
+        live.start()
+    else:
+        bar.start()
     try:
         screenshots.process_many(provider, videos, cfg, workers=workers,
-                                 progress=progress, on_done=on_done)
+                                 progress=progress, on_done=on_done, live=live)
     except KeyboardInterrupt:
-        if bar._tty:
+        if live is not None:
+            live.finish(label="已中断")
+        elif bar._tty:
             bar.stream.write("\n")
         util.atomic_write_json(util.QUEUE_FILE, videos)
         util.log("已中断，进度已保存", "WARN")
         raise
     finally:
         util.atomic_write_json(util.QUEUE_FILE, videos)
-    bar.finish()
+    if live is not None:
+        live.finish()
+    else:
+        bar.finish()
 
-    done = sum(1 for v in videos if v.get("done"))
+    failed = [v for v in videos if not v.get("done")]
+    done = len(videos) - len(failed)
     util.log(f"截图完成：{done}/{len(videos)} 个成功，结果: {util.QUEUE_FILE}")
+    for v in failed[:10]:
+        util.log(f"  ✗ {v.get('name')}  {v.get('error') or ''}", "WARN")
+    if len(failed) > 10:
+        util.log(f"  …另有 {len(failed) - 10} 个未成功", "WARN")
 
 
 def cmd_review(args, cfg):

@@ -348,3 +348,146 @@ class ProgressBar:
         if self._tty:
             self.stream.write("\n")
             self.stream.flush()
+
+
+class LiveDisplay:
+    """In-place, multi-line progress display for long batch jobs.
+
+    Layout::
+
+        [██████░░░░░░░░] 12/50 ✓10 ✗2  截图
+          文件名A.mp4              截图 3/8
+          文件名B.mp4              取直链
+
+    The block has a fixed height and is redrawn in place (no scrolling) on every
+    update and from a background ticker, so the terminal stays calm.  When
+    ``stream`` is not a tty it stays silent and only prints on :meth:`finish`.
+    """
+
+    def __init__(self, total: int, slots: int = 1, label: str = "",
+                 width: int = 28, stream=None, interval: float = 0.4):
+        self.total = max(0, int(total))
+        self.slots = max(0, int(slots))
+        self.label = label
+        self.width = width
+        self.stream = stream or sys.stderr
+        self.interval = max(0.05, float(interval))
+        self.done = 0
+        self.ok = 0
+        self.fail = 0
+        self.tasks: list[str] = []
+        self._lock = threading.RLock()
+        self._drawn = 0
+        self._tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self) -> None:
+        if not self._tty:
+            return
+        self._thread = threading.Thread(target=self._tick, daemon=True)
+        self._thread.start()
+        with self._lock:
+            self._render_locked()
+
+    def set_progress(self, done=None, ok=None, fail=None, label=None) -> None:
+        with self._lock:
+            if done is not None:
+                self.done = int(done)
+            if ok is not None:
+                self.ok = int(ok)
+            if fail is not None:
+                self.fail = int(fail)
+            if label is not None:
+                self.label = label
+            self._render_locked()
+
+    def set_tasks(self, tasks) -> None:
+        with self._lock:
+            self.tasks = [str(t) for t in tasks]
+            self._render_locked()
+
+    def log(self, message: str) -> None:
+        with self._lock:
+            if not self._tty:
+                print(message, file=self.stream, flush=True)
+                return
+            self._erase_locked()
+            self.stream.write(message + "\n")
+            self.stream.flush()
+            self._render_locked()
+
+    def finish(self, label: str | None = None) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        if label is not None:
+            self.label = label
+        summary = self._summary()
+        with self._lock:
+            if not self._tty:
+                print(summary, file=self.stream, flush=True)
+                return
+            self._erase_locked()
+            self.stream.write(summary + "\n")
+            self.stream.flush()
+
+    def _tick(self) -> None:
+        while not self._stop.wait(self.interval):
+            with self._lock:
+                self._render_locked()
+
+    def _bar(self) -> str:
+        frac = min(1.0, self.done / (self.total or 1))
+        filled = int(round(frac * self.width))
+        return "█" * filled + "░" * (self.width - filled)
+
+    def _summary(self) -> str:
+        extra = f" ✓{self.ok}" + (f" ✗{self.fail}" if self.fail else "")
+        label = f"  {self.label}" if self.label else ""
+        return f"[{self._bar()}] {self.done}/{self.total}{extra}{label}"
+
+    def _lines(self) -> list[str]:
+        cols = shutil.get_terminal_size((100, 24)).columns
+        lines = [self._summary()]
+        for i in range(self.slots):
+            text = self.tasks[i] if i < len(self.tasks) else ""
+            lines.append(("  " + text)[: max(0, cols - 1)] if text else "")
+        return lines
+
+    def _render_locked(self) -> None:
+        if not self._tty:
+            return
+        lines = self._lines()
+        count = len(lines)
+        buf = []
+        if self._drawn:
+            up = self._drawn - 1
+            if up > 0:
+                buf.append(f"\033[{up}A")
+            buf.append("\r")
+        for i, line in enumerate(lines):
+            buf.append("\033[2K" + line)
+            if i != count - 1:
+                buf.append("\n")
+        self.stream.write("".join(buf))
+        self.stream.flush()
+        self._drawn = count
+
+    def _erase_locked(self) -> None:
+        if not self._tty or not self._drawn:
+            return
+        count = self._drawn
+        buf = []
+        up = count - 1
+        if up > 0:
+            buf.append(f"\033[{up}A")
+        buf.append("\r")
+        for i in range(count):
+            buf.append("\033[2K")
+            if i != count - 1:
+                buf.append("\n")
+        self.stream.write("".join(buf))
+        self.stream.flush()
+        self._drawn = 0

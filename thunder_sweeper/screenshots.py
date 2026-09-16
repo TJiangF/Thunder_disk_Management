@@ -172,12 +172,14 @@ def disk_thumbs(video_id, needed: int) -> list[str]:
 
 
 def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = None,
-                 progress=None, on_done=None) -> list[dict]:
+                 progress=None, on_done=None, live=None) -> list[dict]:
     """Screenshot many videos concurrently.
 
     Each worker thread gets its own ThunderAPI (own requests.Session); token
-    refresh is serialized inside the shared TokenProvider.  A heartbeat logs the
-    videos still in progress so a slow frame does not look like a hang.
+    refresh is serialized inside the shared TokenProvider.  When ``live`` (a
+    :class:`util.LiveDisplay`) is given, the videos in progress are painted into
+    its dedicated lines; otherwise a 15s heartbeat logs them so a slow frame does
+    not look like a hang.
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -189,6 +191,7 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
     counter = {"n": 0}
     lock = threading.Lock()
     in_flight: dict = {}
+    order: list = []
     inflight_lock = threading.Lock()
     stop = threading.Event()
 
@@ -199,18 +202,45 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
             local.api = api
         return api
 
+    def snapshot() -> list[str]:
+        with inflight_lock:
+            return [in_flight[k]["text"] for k in order if k in in_flight]
+
+    def publish() -> None:
+        if live is not None:
+            live.set_tasks(snapshot())
+
     def task(video):
         key = id(video)
+        name = video.get("name") or str(video.get("id"))
         with inflight_lock:
-            in_flight[key] = video.get("name") or video.get("id")
+            in_flight[key] = {"name": name, "text": name}
+            order.append(key)
+        publish()
+
+        def report(text):
+            with inflight_lock:
+                slot = in_flight.get(key)
+                if slot is not None:
+                    slot["text"] = text
+            publish()
+
         try:
-            process_video(get_api(), video, cfg, resume=True, verbose=(workers == 1))
+            process_video(get_api(), video, cfg, resume=True,
+                          verbose=(workers == 1 and live is None),
+                          status=(report if live is not None else None))
         except Exception as exc:
             video["error"] = str(exc)
-            util.log(f"[{video.get('name')}] 处理异常: {exc}", "ERROR")
+            if live is not None:
+                live.log(f"[{name}] 处理异常: {exc}")
+            else:
+                util.log(f"[{name}] 处理异常: {exc}", "ERROR")
         finally:
             with inflight_lock:
                 in_flight.pop(key, None)
+                if key in order:
+                    order.remove(key)
+            publish()
         if on_done:
             try:
                 on_done(video)
@@ -229,14 +259,16 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
     def heartbeat():
         while not stop.wait(15):
             with inflight_lock:
-                names = list(in_flight.values())
+                names = [v["name"] for v in in_flight.values()]
             if names:
                 head = ", ".join(names[:6])
                 more = f" …等 {len(names)} 个" if len(names) > 6 else ""
                 util.log(f"进行中：{head}{more}")
 
-    hb = threading.Thread(target=heartbeat, daemon=True)
-    hb.start()
+    hb = None
+    if live is None:
+        hb = threading.Thread(target=heartbeat, daemon=True)
+        hb.start()
     try:
         if workers == 1:
             for v in videos:
@@ -272,12 +304,23 @@ def _fresh_url(api, file_id: str, cfg: dict) -> str:
 
 
 def process_video(api, video: dict, cfg: dict, resume: bool = True,
-                  fractions: list[float] | None = None, verbose: bool = True) -> dict:
+                  fractions: list[float] | None = None, verbose: bool = True,
+                  status=None) -> dict:
     from . import thunder_api
 
     def say(message, level="INFO"):
         if verbose:
             util.log(message, level)
+
+    short = video.get("name") or str(video.get("id"))
+
+    def report(stage):
+        if status is None:
+            return
+        try:
+            status(f"{stage}  {short}")
+        except Exception:
+            pass
 
     fractions = fractions or cfg["fractions"]
     needed = len(fractions)
@@ -300,12 +343,14 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
     name = video.get("name")
 
     say(f"[{name}] 获取播放直链...")
+    report("获取直链")
     t0 = time.time()
     try:
         links = api.play_links(video["id"])
     except Exception as exc:
         video["error"] = f"获取直链失败: {exc}"
         say(f"[{name}] {video['error']}", "ERROR")
+        report("取链接失败")
         return video
 
     meta = thunder_api.extract_meta(links["info"])
@@ -313,9 +358,11 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
     video["width"] = video.get("width") or meta.get("width")
     video["height"] = video.get("height") or meta.get("height")
     say(f"[{name}] 直链已就绪（{time.time() - t0:.1f}s）")
+    report("直链就绪")
 
     if not video.get("duration"):
         say(f"[{name}] 元数据无时长，尝试探测...")
+        report("探测时长")
         preference = cfg.get("link_preference", "media")
         url0 = (links.get(preference) or links.get("media")
                 or links.get("vip") or links.get("web"))
@@ -342,42 +389,49 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
         out_path = out_dir / f"{i}.jpg"
         if resume and out_path.exists() and out_path.stat().st_size > 0:
             thumbs.append(rel(out_path))
+            report(f"已有 {i}/{needed}")
             say(f"[{name}] 第 {i}/{needed} 张已存在，跳过")
             continue
 
         if time.time() - started > video_timeout:
+            report("超时放弃剩余")
             say(f"[{name}] 超过单视频时限 {video_timeout:.0f}s，跳过剩余 {needed - i + 1} 张", "WARN")
             break
 
-        status = "error"
+        report(f"截图 {i}/{needed}")
+        res = "error"
         for attempt in range(1, retries + 1):
             t = time.time()
             try:
                 url = _fresh_url(api, video["id"], cfg)
             except Exception as exc:
-                status = "error"
+                res = "error"
                 say(f"[{name}] 第 {i}/{needed} 张取链失败（{attempt}/{retries}）: {exc}", "WARN")
                 time.sleep(1)
                 continue
-            status = grab(url, seconds, out_path, cfg)
-            if status == "ok":
+            res = grab(url, seconds, out_path, cfg)
+            if res == "ok":
                 thumbs.append(rel(out_path))
                 say(f"[{name}] 第 {i}/{needed} 张完成（{time.time() - t:.1f}s）")
                 break
-            kind = "超时" if status == "timeout" else "失败"
+            kind = "超时" if res == "timeout" else "失败"
+            report(f"重试 {i}/{needed} {attempt}/{retries}")
             say(f"[{name}] 第 {i}/{needed} 张第 {attempt}/{retries} 次{kind}（{time.time() - t:.1f}s）", "WARN")
-            if status == "timeout":
+            if res == "timeout":
                 break  # 超时说明该区段不可达，重试无意义
             time.sleep(1)
 
-        if status == "ok":
+        if res == "ok":
             timeouts = 0
-        elif status == "timeout":
+            report(f"截图 {i}/{needed} ✓")
+        elif res == "timeout":
             timeouts += 1
+            report(f"截图 {i}/{needed} ✗")
             if timeouts >= 2:
                 say(f"[{name}] 连续 {timeouts} 张超时，放弃该视频剩余帧", "WARN")
                 break
         else:
+            report(f"截图 {i}/{needed} ✗")
             say(f"[{name}] 第 {i}/{needed} 张最终失败", "ERROR")
 
     video["thumbs"] = thumbs
