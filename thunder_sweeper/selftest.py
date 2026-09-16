@@ -726,6 +726,124 @@ def test_cli(r: Results) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_failure_modes(r: Results) -> None:
+    r.section("失败处理（网络抖动不再静默失败/不覆盖数据）")
+
+    # captcha/init 的网络超时应自动重试
+    from . import chrome_tokens as ct
+
+    with isolated_home():
+        import requests as _rq
+
+        class _Resp:
+            def json(self):
+                return {"captcha_token": "tok", "expires_in": 300}
+
+        calls = {"n": 0}
+
+        def flaky_post(url, headers=None, data=None, timeout=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise _rq.exceptions.ReadTimeout("read timeout=30")
+            return _Resp()
+
+        cfg = dict(util.DEFAULT_CONFIG)
+        cfg["request_timeout"] = 1
+        cfg["api_retries"] = 5
+        store = {
+            "credentials.access_token": "a", "credentials.refresh_token": "r",
+            "credentials.expires_at": int(time.time()) + 10000,
+            "captcha.client_id": "cid", "captcha.device_id": "did",
+        }
+        saved = ct.requests.post
+        ct.requests.post = flaky_post
+        try:
+            p = ct.TokenProvider(store, cfg)
+            tok = p.captcha_token("get:/drive/v1/files")
+            r.eq("captcha 网络超时会重试并成功", (tok, calls["n"]), ("tok", 3))
+        except Exception as exc:
+            r.check("captcha 网络超时会重试并成功", False, str(exc))
+        finally:
+            ct.requests.post = saved
+
+        # 全部失败时应抛出（而不是返回空）
+        def always_fail(url, headers=None, data=None, timeout=None):
+            raise _rq.exceptions.ReadTimeout("read timeout=30")
+
+        fresh_store = json.loads(json.dumps(store))
+        fresh_store.pop("captcha.tokens", None)  # 清掉上一个子测试缓存的 token
+        ct.requests.post = always_fail
+        try:
+            ct.TokenProvider(fresh_store, cfg).captcha_token("get:/drive/v1/files")
+            r.check("captcha 持续失败会抛出", False)
+        except Exception:
+            r.check("captcha 持续失败会抛出", True)
+        finally:
+            ct.requests.post = saved
+
+    # 根目录读取失败时 walk 必须抛出，而不是返回空结果
+    class DeadAPI:
+        cfg = {"api_delay": 0}
+
+        def list_folder(self, parent_id):
+            raise RuntimeError("read timeout=30")
+
+    try:
+        thunder_api.ThunderAPI.walk(DeadAPI(), state={})
+        r.check("根目录失败时扫描抛错", False)
+    except RuntimeError as exc:
+        r.check("根目录失败时扫描抛错", "无法读取网盘根目录" in str(exc), str(exc))
+
+    # 非根目录失败只记录、继续
+    class PartialAPI:
+        cfg = {"api_delay": 0}
+
+        def list_folder(self, parent_id):
+            if parent_id == "":
+                return [{"id": "f1", "name": "F1", "kind": "drive#folder"}]
+            raise RuntimeError("boom")
+
+    state = thunder_api.ThunderAPI.walk(PartialAPI(), state={})
+    r.eq("子目录失败被记录且不中断", len(state["failed"]), 1)
+
+    # cmd_scan 不会用空结果覆盖已有数据
+    import subprocess
+
+    tmp = tempfile.mkdtemp(prefix="sweeper-scan-guard-")
+    try:
+        data = os.path.join(tmp, "data")
+        os.makedirs(os.path.join(data, "thumbs"))
+        good = [{"id": "keep", "name": "KEEP.mp4", "path": "/", "size": 9}]
+        util.atomic_write_json(util.Path(data) / "videos.json", good)
+        # fake a provider that fails at the network layer
+        script = (
+            "import sys, types, json\n"
+            "from thunder_sweeper import util, chrome_tokens, thunder_api\n"
+            "class P:\n"
+            "    def headers(self, action=None): return {}\n"
+            "    def access_token(self): return 'x'\n"
+            "    def force_refresh(self): pass\n"
+            "    def invalidate_captcha(self, a=None): pass\n"
+            "    def captcha_token(self, a=None): return 'x'\n"
+            "def boom(self, parent_id): raise RuntimeError('read timeout')\n"
+            "thunder_api.ThunderAPI.list_folder = boom\n"
+            "chrome_tokens.load_provider = lambda cfg=None: P()\n"
+            "sys.argv = ['x', 'scan']\n"
+            "from thunder_sweeper.__main__ import main\n"
+            "main()\n"
+        )
+        out = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                             text=True, env=dict(os.environ, THUNDER_SWEEPER_HOME=tmp),
+                             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        kept = util.read_json(util.Path(data) / "videos.json")
+        r.check("扫描失败时保留原有 videos.json",
+                kept == good, f"rc={out.returncode} kept={kept}")
+        r.check("扫描失败时非零退出", out.returncode != 0,
+                f"rc={out.returncode} out={(out.stdout + out.stderr)[-200:]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_live(r: Results) -> None:
     r.section("live（真实迅雷 API 沙箱：只动自建测试文件夹）")
     from . import chrome_tokens
@@ -794,6 +912,7 @@ def run(live: bool = False) -> int:
         ("captcha", test_captcha_provider), ("scan_walk", test_scan_walk),
         ("ffmpeg", test_ffmpeg_pipeline), ("screenshots", test_screenshots),
         ("review_server", test_review_server), ("review_http_edge", test_review_http_edge),
+        ("failure_modes", test_failure_modes),
         ("request_retry", test_request_retry), ("cli", test_cli),
     ):
         r.run(name, lambda fn=fn: fn(r))

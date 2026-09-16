@@ -629,23 +629,52 @@ class TokenProvider:
             "Referer": "https://pan.xunlei.com/",
             "User-Agent": UA,
         }
-        resp = requests.post(CAPTCHA_INIT_URL, headers=headers, data=json.dumps(body),
-                             timeout=self.cfg["request_timeout"])
-        data = resp.json()
-        if "captcha_token" not in data:
-            raise TokenError(f"获取 captcha_token 失败（action={action}）: {data}")
-        token = data["captcha_token"]
-        self._tokens()[action] = {
-            "token": token,
-            "expires_at": int(time.time()) + int(data.get("expires_in", 300)),
-        }
-        # 兼容旧字段（默认 action）
-        if action == self.DEFAULT_ACTION:
-            self.store["captcha.token"] = token
-            self.store["captcha.expires_at"] = self._tokens()[action]["expires_at"]
-        self.save()
-        util.log(f"captcha_token 已更新（action={action}）")
-        return token
+        payload = json.dumps(body)
+        last_err: Exception | None = None
+        attempts = max(3, int(self.cfg.get("api_retries", 5)))
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = requests.post(CAPTCHA_INIT_URL, headers=headers, data=payload,
+                                     timeout=self.cfg["request_timeout"])
+            except requests.RequestException as exc:
+                last_err = TokenError(f"获取 captcha_token 网络错误（action={action}）: {exc}")
+                if attempt < attempts:
+                    wait = min(10.0, 1.5 * attempt)
+                    util.log(f"{last_err}，{wait:.1f}s 后重试（{attempt}/{attempts}）", "WARN")
+                    time.sleep(wait)
+                    continue
+                break
+            try:
+                data = resp.json()
+            except ValueError:
+                last_err = TokenError(
+                    f"获取 captcha_token 响应异常 HTTP {resp.status_code}: {resp.text[:120]}")
+                if resp.status_code >= 500 and attempt < attempts:
+                    time.sleep(1.5 * attempt)
+                    continue
+                break
+            if "captcha_token" not in data:
+                last_err = TokenError(f"获取 captcha_token 失败（action={action}）: {data}")
+                if attempt < attempts:
+                    time.sleep(1.5 * attempt)
+                    continue
+                break
+            token = data["captcha_token"]
+            self._tokens()[action] = {
+                "token": token,
+                "expires_at": int(time.time()) + int(data.get("expires_in", 300)),
+            }
+            # 兼容旧字段（默认 action）
+            if action == self.DEFAULT_ACTION:
+                self.store["captcha.token"] = token
+                self.store["captcha.expires_at"] = self._tokens()[action]["expires_at"]
+            self.save()
+            if attempt > 1:
+                util.log(f"captcha_token 已更新（action={action}，第 {attempt} 次尝试成功）")
+            else:
+                util.log(f"captcha_token 已更新（action={action}）")
+            return token
+        raise last_err or TokenError(f"获取 captcha_token 失败（action={action}）")
 
     def headers(self, action: str | None = None) -> dict:
         return {

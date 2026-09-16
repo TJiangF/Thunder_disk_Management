@@ -83,6 +83,13 @@ def _do_review(cfg) -> None:
     cli.cmd_review(_ns(port=_prompt_int("网页端口", 8765)), util.load_config())
 
 
+def _require_login() -> bool:
+    if _is_logged_in():
+        return True
+    util.log("还没有登录迅雷云盘，请先选 [1] 登录。", "WARN")
+    return False
+
+
 def _menu_once(cfg) -> bool:
     choice = input("\n请选择操作: ").strip().lower()
     from . import __main__ as cli
@@ -92,13 +99,15 @@ def _menu_once(cfg) -> bool:
     if choice == "1":
         _do_login(cfg)
     elif choice == "2":
-        cli.cmd_scan(_ns(resume=True, limit=None, min_size=None), util.load_config())
+        if _require_login():
+            cli.cmd_scan(_ns(resume=True, limit=None, min_size=None), util.load_config())
     elif choice == "3":
         cli.cmd_classify(_ns(), util.load_config())
     elif choice == "4":
-        cli.cmd_shots(_ns(top=100, more=None, all=False, ids=None, min_size=None,
-                          no_resume=False, retry_failed=False, workers=None),
-                      util.load_config())
+        if _require_login():
+            cli.cmd_shots(_ns(top=100, more=None, all=False, ids=None, min_size=None,
+                              no_resume=False, retry_failed=False, workers=None),
+                          util.load_config())
     elif choice == "5":
         _do_review(cfg)
     elif choice == "6":
@@ -106,13 +115,16 @@ def _menu_once(cfg) -> bool:
                              clean_junk=False, include_other=False, no_rescan=True,
                              fix_inside=False, yes=True), util.load_config())
     elif choice == "7":
+        if not _require_login():
+            return True
         answer = input("执行整理会把文件移动到 /整理 并按分类归位，确认？(yes/no): ").strip().lower()
         if answer == "yes":
             cli.cmd_organize(_ns(apply=True, limit=None, delete_folders=True,
                                  clean_junk=True, include_other=False, no_rescan=False,
                                  fix_inside=True, yes=True), util.load_config())
     elif choice == "8":
-        cli.cmd_apply(_ns(yes=False, dry_run=False), util.load_config())
+        if _require_login():
+            cli.cmd_apply(_ns(yes=False, dry_run=False), util.load_config())
     elif choice == "9":
         cli.cmd_status(_ns(), util.load_config())
     elif choice == "d":
@@ -134,6 +146,8 @@ def run(cfg: dict | None = None) -> int:
         except KeyboardInterrupt:
             print()
             return 130
+        except SystemExit as exc:
+            util.log(str(exc) or "操作未完成（请检查上面的错误信息）", "ERROR")
         except Exception as exc:
             util.log(f"操作失败: {exc}", "ERROR")
         _pause()

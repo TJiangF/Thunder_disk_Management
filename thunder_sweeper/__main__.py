@@ -66,6 +66,14 @@ def cmd_scan(args, cfg):
     util.atomic_write_json(util.SCAN_STATE_FILE, state)
 
     videos = sorted(state.get("videos", []), key=lambda v: v.get("size", 0), reverse=True)
+    if not videos and not state.get("files"):
+        failed = state.get("failed") or []
+        if failed:
+            raise SystemExit(
+                f"扫描未获取到任何文件（失败目录 {len(failed)} 个，首个：{failed[0][1]}）。"
+                "已保留原有数据，未覆盖。请检查网络后重试。"
+            )
+        raise SystemExit("扫描未获取到任何文件（云盘可能为空，或 token 失效）。已保留原有数据。")
     if args.min_size:
         floor = int(args.min_size * 1024 * 1024)
         videos = [v for v in videos if v.get("size", 0) >= floor]
@@ -469,6 +477,11 @@ def _auto_rescan_classify(cfg, api, progress=None):
     state = api.walk(state={}, on_progress=scan_prog)
     videos = sorted(state.get("videos", []), key=lambda v: v.get("size", 0), reverse=True)
     files = state.get("files", [])
+    if not files and (util.read_json(util.FILES_FILE) or []):
+        raise RuntimeError(
+            "重新扫描没有取到任何文件，已保留原有 videos/files/classified，未覆盖。"
+            "请检查网络后重试。"
+        )
     util.atomic_write_json(util.VIDEOS_FILE, videos)
     util.atomic_write_json(util.FILES_FILE, files)
     util.atomic_write_json(util.SCAN_STATE_FILE, state)

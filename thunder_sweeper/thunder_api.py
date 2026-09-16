@@ -209,6 +209,13 @@ class ThunderAPI:
             except Exception as exc:
                 util.log(f"列目录失败 {parent_path} ({parent_id}): {exc}", "ERROR")
                 state["failed"].append([parent_id, parent_path])
+                if parent_id == "":
+                    # the root itself failed (usually a network/token hiccup):
+                    # surface it so a scan never silently reports "0 个视频".
+                    raise RuntimeError(
+                        f"无法读取网盘根目录，扫描已中止：{exc}\n"
+                        "请检查网络/代理后重试；若反复失败，重新运行 login。"
+                    ) from exc
                 continue
 
             visited.add(parent_id)
