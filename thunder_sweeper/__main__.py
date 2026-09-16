@@ -316,7 +316,8 @@ def cmd_review(args, cfg):
                 exclude.add("adult_other")
             move_cats = categories.ids() - exclude
             plan = organize.load_and_build(cfg, move_cats=move_cats,
-                                           fix_inside=bool(opts.get("fix_inside")))
+                                           fix_inside=bool(opts.get("fix_inside")),
+                                           scope=opts.get("scope"))
             util.atomic_write_json(util.DATA_DIR / "organize_plan.json", plan)
             result = {}
             if opts.get("apply"):
@@ -330,7 +331,8 @@ def cmd_review(args, cfg):
                 util.atomic_write_json(util.DATA_DIR / "organize_applied.json", result["move"])
             if opts.get("clean_junk"):
                 on_progress("清理", 0, 0, "清理垃圾文件夹…")
-                result["clean"] = organize.clean_junk_folders(api, log=util.log)
+                result["clean"] = organize.clean_junk_folders(api, log=util.log,
+                                                              scope=opts.get("scope"))
                 util.atomic_write_json(util.DATA_DIR / "organize_clean.json", result["clean"])
             if not opts.get("no_rescan"):
                 _auto_rescan_classify(cfg, api, progress=on_progress)
@@ -533,10 +535,13 @@ def cmd_organize(args, cfg):
     if not getattr(args, "include_other", False):
         exclude.add("adult_other")
     move_cats = categories.ids() - exclude
-    plan = organize.load_and_build(cfg, move_cats=move_cats, fix_inside=getattr(args, "fix_inside", False))
+    scope = getattr(args, "scope", None)
+    plan = organize.load_and_build(cfg, move_cats=move_cats,
+                                   fix_inside=getattr(args, "fix_inside", False), scope=scope)
     util.atomic_write_json(util.DATA_DIR / "organize_plan.json", plan)
     s = plan["summary"]
-    util.log(f"数据来源 {plan['files_source']} · 目标根 {plan['base']}")
+    util.log(f"数据来源 {plan['files_source']} · 目标根 {plan['base']}"
+             + (f" · 作用路径 {scope}" if scope else " · 作用路径 全部"))
     util.log(f"待移动 {s['move_count']} 个，共 {util.human_size(s['move_size'])}")
     for k, v in s["targets"].items():
         util.log(f"  → {k}: {v} 个")
@@ -586,7 +591,7 @@ def cmd_organize(args, cfg):
 
     if args.clean_junk:
         util.log("开始清理只含垃圾文件的文件夹（递归）…")
-        res = organize.clean_junk_folders(api, log=util.log)
+        res = organize.clean_junk_folders(api, log=util.log, scope=scope)
         util.atomic_write_json(util.DATA_DIR / "organize_clean.json", res)
         util.log(f"清理完成：删除文件夹 {len(res['deleted'])} 个，失败 {len(res['failed'])}")
         util.log("明细: data/organize_clean.json")
@@ -674,6 +679,8 @@ def main(argv=None):
                        help="执行后不自动重新扫描+分类（默认会自动做）")
     p_org.add_argument("--fix-inside", action="store_true",
                        help="连同纠正“已在 /整理 内但归类不对”的文件（默认不动它们）")
+    p_org.add_argument("--scope", metavar="PATH",
+                       help="只整理该云盘路径（含子目录）下的文件，其它不移动/不修改")
     p_org.add_argument("--yes", action="store_true", help="跳过确认")
 
     p_scan = sub.add_parser("scan", help="递归扫描整个网盘，收集视频并按大小排序")

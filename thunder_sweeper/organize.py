@@ -48,7 +48,13 @@ def is_significant(f: dict, small_mb: float, large_mb: float) -> bool:
 
 def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
                small_mb: float = 20, large_mb: float = 100,
-               move_cats: set | None = None, fix_inside: bool = False) -> dict:
+               move_cats: set | None = None, fix_inside: bool = False,
+               scope: str | None = None) -> dict:
+    scope = ("/" + scope.strip("/")) if scope and scope.strip("/") else None
+    if scope:
+        files = [f for f in files
+                 if (f.get("path") or "/") == scope
+                 or (f.get("path") or "/").startswith(scope + "/")]
     cat = {c.get("id"): c.get("category") for c in (classified or [])}
     tree = categories.load_tree()
     paths = {x["id"]: x["path"] for x in categories.flat(tree)}
@@ -153,6 +159,7 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
 
     return {
         "base": base,
+        "scope": scope,
         "moves": moves,
         "mismatches": mismatches,
         "by_target": {k: v for k, v in sorted(by_target.items())},
@@ -174,7 +181,8 @@ def build_plan(files: list[dict], classified: list[dict], base: str = "/整理",
     }
 
 
-def load_and_build(cfg: dict, move_cats: tuple | None = None, fix_inside: bool = False) -> dict:
+def load_and_build(cfg: dict, move_cats: tuple | None = None, fix_inside: bool = False,
+                   scope: str | None = None) -> dict:
     from . import util
 
     files = util.read_json(util.FILES_FILE) or []
@@ -186,9 +194,48 @@ def load_and_build(cfg: dict, move_cats: tuple | None = None, fix_inside: bool =
     small = cfg.get("organize_small_mb", 20)
     large = cfg.get("organize_large_mb", 100)
     plan = build_plan(files, classified, base=base, small_mb=small, large_mb=large,
-                      move_cats=move_cats, fix_inside=fix_inside)
+                      move_cats=move_cats, fix_inside=fix_inside, scope=scope)
     plan["files_source"] = source
     return plan
+
+
+def folder_tree(files: list[dict]) -> list[dict]:
+    """Nested cloud-folder tree (name/path/children/count) for scope selection.
+
+    Built from the ``path`` field (the folder containing each file), so it lists
+    every folder that the scan saw.  ``count`` is the number of files within.
+    """
+    direct: dict = collections.Counter()
+    paths: set = set()
+    for f in files:
+        raw = (f.get("path") or "").strip("/")
+        p = "/" + raw if raw else "/"
+        direct[p] += 1
+        while p != "/":
+            paths.add(p)
+            p = p.rsplit("/", 1)[0] or "/"
+
+    def count_under(path: str) -> int:
+        return sum(c for q, c in direct.items()
+                   if q == path or q.startswith(path + "/"))
+
+    def build(prefix: str) -> list[dict]:
+        pre = "/" if prefix == "/" else prefix + "/"
+        seen: set = set()
+        out = []
+        for q in sorted(paths):
+            if not q.startswith(pre):
+                continue
+            seg = q[len(pre):].split("/", 1)[0]
+            child = "/" + seg if pre == "/" else pre + seg
+            if child in seen:
+                continue
+            seen.add(child)
+            out.append({"name": seg, "path": child,
+                        "children": build(child), "count": count_under(child)})
+        return out
+
+    return build("/")
 
 
 # --------------------------------------------------------------------------- #
@@ -408,14 +455,18 @@ def apply_plan(api, plan: dict, limit: int | None = None, delete_folders: bool =
 PROTECT_NAMES = {"超级保险箱", "在线解压", "整理", "我的转存"}
 
 
-def clean_junk_folders(api, log=None, protect: set | None = None) -> dict:
+def clean_junk_folders(api, log=None, protect: set | None = None,
+                       scope: str | None = None) -> dict:
     """Recursively delete folders that contain only junk files (apk/html/txt/…)
     or are empty.  Post-order: children first, then parents.
 
     A folder is kept if it still has a non-junk file or any subfolder.
+    ``scope`` limits the walk to one cloud path (its children); the scope folder
+    itself is never deleted.
     """
     protect = protect or PROTECT_NAMES
     deleted, failed = [], []
+    scope = ("/" + scope.strip("/")) if scope and scope.strip("/") else None
 
     def say(msg, level="INFO"):
         if log:
@@ -455,6 +506,25 @@ def clean_junk_folders(api, log=None, protect: set | None = None) -> dict:
             failed.append({"path": path, "error": str(exc)})
             say(f"删除失败 {path}: {exc}", "ERROR")
             return False
+
+    if scope:
+        start_id = Folders(api).id_of(scope, create=False)
+        if not start_id:
+            say(f"作用路径不存在，跳过垃圾清理: {scope}", "WARN")
+            return {"deleted": deleted, "failed": failed}
+        say(f"仅清理作用路径内的垃圾文件夹: {scope}")
+        try:
+            entries = api.list_folder(start_id)
+        except Exception as exc:
+            say(f"列目录失败 {scope}: {exc}", "WARN")
+            entries = []
+        base = scope.rstrip("/")
+        for f in [e for e in entries if e.get("kind") == "drive#folder"]:
+            if f.get("name") in protect:
+                continue
+            walk(f["id"], f"{base}/{f.get('name')}")
+            time.sleep(0.1)
+        return {"deleted": deleted, "failed": failed}
 
     root = api.list_folder("")
     for f in [e for e in root if e.get("kind") == "drive#folder"]:

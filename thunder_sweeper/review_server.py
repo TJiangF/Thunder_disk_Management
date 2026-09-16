@@ -20,7 +20,7 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from . import categories, classify, dedupe, organize, screenshots, util
 
@@ -227,6 +227,13 @@ PAGE = r"""<!doctype html>
     <div class="row" style="margin-bottom:10px">
       <button onclick="loadOrganize(true)">重新生成方案</button>
       <span class="stat">预览；勾选下面选项并点“执行”才会真正改动云盘。</span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <span class="stat">作用路径（只整理该路径下的文件，其它不动）：</span>
+      <div class="filter-drop">
+        <button id="path-btn" onclick="togglePathMenu(event)">全部路径 ▾</button>
+        <div id="path-menu" class="filter-menu"></div>
+      </div>
     </div>
     <div class="row" style="margin-bottom:10px">
       <span class="stat">执行内容（默认执行移动，完成后自动重扫+分类）：</span>
@@ -595,11 +602,60 @@ function markAllRedundant() {
 
 /* ---------------- organize (preview only) ---------------- */
 let ORGANIZE = null;
+let PATHTREE = null;
+let orgScope = null;                 // null = 全部路径
+async function loadPaths() {
+  if (PATHTREE) return;
+  try {
+    const r = await fetch('/organize/paths');
+    const j = await r.json();
+    PATHTREE = (j && j.tree) || [];
+  } catch (e) { PATHTREE = []; }
+  renderPathMenu();
+}
+function _pnode(n) {
+  const has = n.children && n.children.length;
+  const arrow = has ? '<span class="arrow">›</span>' : '';
+  const sub = has ? '<div class="submenu">' + n.children.map(_pnode).join('') + '</div>' : '';
+  const sel = (n.path === orgScope);
+  const check = sel ? '<span class="check">✓</span>' : '';
+  return '<div class="fitem' + (sel ? ' sel' : '') + '" data-path="' + esc(n.path) + '" ' +
+    'onclick="setScope(this.dataset.path); event.stopPropagation();">' +
+    '<span>' + esc(n.name) + ' <span class="stat" style="font-size:11px">' + (n.count || 0) + '</span></span>' +
+    '<span>' + check + arrow + '</span>' + sub + '</div>';
+}
+function renderPathMenu() {
+  const box = document.getElementById('path-menu');
+  if (!box) return;
+  const tree = PATHTREE || [];
+  box.innerHTML =
+    '<div class="fitem' + (!orgScope ? ' sel' : '') + '" onclick="setScope(null); event.stopPropagation();">' +
+      '<span>全部路径</span>' + (!orgScope ? '<span class="check">✓</span>' : '') + '</div>' +
+    (tree.length ? tree.map(_pnode).join('')
+                 : '<div class="fitem"><span class="stat">（暂无路径，先扫描云盘）</span></div>');
+  const btn = document.getElementById('path-btn');
+  if (btn) btn.textContent = (orgScope || '全部路径') + ' ▾';
+}
+function togglePathMenu(ev) {
+  if (ev) ev.stopPropagation();
+  loadPaths();
+  const m = document.getElementById('path-menu');
+  if (m) m.style.display = (m.style.display === 'block') ? 'none' : 'block';
+}
+function closePathMenu() { const m = document.getElementById('path-menu'); if (m) m.style.display = 'none'; }
+function setScope(path) {
+  orgScope = path || null;
+  renderPathMenu();
+  closePathMenu();
+  loadOrganize(true);
+}
 async function loadOrganize(force) {
+  loadPaths();
   const box = document.getElementById('organize-body');
   box.innerHTML = '<p class="stat">生成方案中…</p>';
   const fx = document.getElementById('org-fix');
-  const q = (force ? '?force=1' : '?') + (fx && fx.checked ? '&fix_inside=1' : '');
+  const q = (force ? '?force=1' : '?') + (fx && fx.checked ? '&fix_inside=1' : '') +
+            (orgScope ? ('&scope=' + encodeURIComponent(orgScope)) : '');
   try {
     const r = await fetch('/organize' + q);
     const j = await r.json();
@@ -924,6 +980,7 @@ function toggleFilterMenu(ev) {
 function closeFilterMenu() { const m = document.getElementById('chips'); if (m) m.style.display = 'none'; }
 function setFilter(id) { filterCat = id; render(); closeFilterMenu(); }
 document.addEventListener('click', closeFilterMenu);
+document.addEventListener('click', closePathMenu);
 function populateBatchSelect() {
   const sel = document.getElementById('batch-cat');
   if (!sel) return;
@@ -1254,8 +1311,10 @@ async function runOrganize() {
     delete_folders: document.getElementById('org-del').checked,
     clean_junk: document.getElementById('org-junk').checked,
     fix_inside: document.getElementById('org-fix').checked,
+    scope: orgScope,
   };
   const what = ['执行移动'];
+  if (opts.scope) what.push('仅限路径 ' + opts.scope);
   if (opts.delete_folders) what.push('删除空白文件夹');
   if (opts.clean_junk) what.push('清理垃圾文件夹');
   if (opts.fix_inside) what.push('纠正 /整理 内错误归类');
@@ -1731,14 +1790,26 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 return
             if parsed.path == "/organize":
                 try:
-                    fix = "fix_inside=1" in (parsed.query or "")
+                    qs = parse_qs(parsed.query or "")
+                    fix = qs.get("fix_inside", ["0"])[0] in ("1", "true", "yes")
+                    scope = (qs.get("scope", [""])[0] or "").strip() or None
                     move_cats = categories.ids() - set(categories.RESERVED) - {"adult_other"}
                     plan = organize.load_and_build(util.load_config(), move_cats=move_cats,
-                                                   fix_inside=fix)
+                                                   fix_inside=fix, scope=scope)
                     payload = {"ok": True, "plan": plan}
                 except Exception as exc:
                     util.log(f"生成整理方案失败: {exc}", "ERROR")
                     payload = {"ok": False, "error": str(exc)}
+                self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                           "application/json")
+                return
+            if parsed.path == "/organize/paths":
+                try:
+                    files = util.read_json(util.FILES_FILE) or util.read_json(util.VIDEOS_FILE) or []
+                    payload = {"ok": True, "tree": organize.folder_tree(files)}
+                except Exception as exc:
+                    util.log(f"生成路径树失败: {exc}", "ERROR")
+                    payload = {"ok": False, "error": str(exc), "tree": []}
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                            "application/json")
                 return
@@ -1882,6 +1953,7 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     "include_other": bool(data.get("include_other")),
                     "no_rescan": bool(data.get("no_rescan")),
                     "fix_inside": bool(data.get("fix_inside")),
+                    "scope": (str(data.get("scope") or "").strip() or None),
                     "limit": int(data.get("limit") or 0) or None,
                 }
                 if not (opts["apply"] or opts["clean_junk"]):
