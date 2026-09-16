@@ -71,6 +71,7 @@ cd /Users/tf/thunder_video_sweeper
 |---|---|
 | `./sweeper login [--restart]` | 启动调试 Chrome 抓取 token（`--restart` 先关掉残留的调试 Chrome） |
 | `./sweeper status` | 查看登录状态 / 视频数 / 待删数 |
+| `./sweeper home [路径] [--reset]` | 查看/设置数据目录（默认 `~/Library/Application Support/ThunderSweeper`；省略路径则显示当前） |
 | `./sweeper scan [--resume] [--limit N] [--min-size MB]` | 递归扫描网盘，视频按大小降序写 `data/videos.json` |
 | `./sweeper classify` | 按命名规则分类，写 `data/classified.json` |
 | `./sweeper dedupe` | 扫描重复文件（同大小+名称相似/同番号），写 `data/duplicates.json` |
@@ -276,11 +277,21 @@ cd /Users/tf/thunder_video_sweeper
 
 ## 5. 目录结构
 
+程序目录（源码）：
+
 ```
 /Users/tf/thunder_video_sweeper/
   sweeper                 # 统一入口脚本（用自带虚拟环境）
-  config.json             # 可选配置
   .venv/                  # Python 虚拟环境
+  build.sh  packaging/    # 打包脚本与资源
+```
+
+数据目录（**源码运行与打包 `.app` 默认相同**）：`~/Library/Application Support/ThunderSweeper`
+（可用 `./sweeper home <路径>` 或向导菜单 `[h]` 修改；见 [3.6/5.5](#55-数据放在哪里)）
+
+```
+<数据目录>/
+  config.json             # 可选配置
   .chrome-profile/        # 调试 Chrome 的独立配置（登录态在这里）
   data/
     tokens.json           登录凭证（含 refresh_token，注意保密）
@@ -302,6 +313,9 @@ cd /Users/tf/thunder_video_sweeper
     review_progress.json  review 的进度标记
     applied.json          apply 的执行结果
 ```
+
+> `location.txt` 也在数据根目录，记录你自定义的数据目录（没有则用默认）。
+
 
 ---
 
@@ -345,9 +359,11 @@ cd /Users/tf/thunder_video_sweeper
 
 ### 数据放在哪里
 
-- **源码运行**：`项目根目录/data/`（与旧版一致）。
-- **打包运行**：`~/Library/Application Support/ThunderSweeper/data/`（`.app` 内部只读，不能写自己的包）。
-- 想强制指定目录：设环境变量 `THUNDER_SWEEPER_HOME=/path/to/dir`。
+- **默认（源码运行与打包 `.app` 相同）**：`~/Library/Application Support/ThunderSweeper/data/`
+  （macOS；Windows 为 `%APPDATA%\ThunderSweeper\data`，Linux 为 `~/.local/share/ThunderSweeper/data`）。
+- **改数据目录**：向导菜单 `[h] 设置数据目录`，或 `./sweeper home <路径>`；`./sweeper home --reset` 恢复默认。
+  设置写入 `<默认目录>/location.txt`，**两种运行方式共用同一份数据**。
+- **优先级最高**：环境变量 `THUNDER_SWEEPER_HOME=/path/to/dir`（临时覆盖，不改设置）。
 - 想在别处放浏览器配置/缓存，也支持 `THUNDER_SWEEPER_CHROME` 指定浏览器可执行文件。
 
 ### 每台机器的前置条件
@@ -368,6 +384,13 @@ cd /Users/tf/thunder_video_sweeper
 ---
 
 ## 6. 重置 / 清空缓存并重新加载（重点）
+
+> **数据目录已改为 `~/Library/Application Support/ThunderSweeper`**（源码与 `.app` 相同）。
+> 本节的 `data/...` 请理解为 `<数据目录>/data/...`。先设一下变量更方便：
+>
+> ```bash
+> DATA="$HOME/Library/Application Support/ThunderSweeper/data"   # 用 ./sweeper home 可确认实际路径
+> ```
 
 按需选择级别，从轻到重：
 

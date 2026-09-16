@@ -69,6 +69,7 @@ _PATCH_ATTRS = (
     "CLASSIFIED_FILE", "CLASSIFY_RULES_FILE", "MANUAL_CATS_FILE", "CATEGORIES_FILE",
     "QUEUE_FILE", "SHOTS_STATE_FILE", "SELECTIONS_FILE", "SCAN_STATE_FILE",
     "REVIEW_PROGRESS_FILE", "CHROME_PROFILE", "CONFIG_FILE", "BACKUP_DIR",
+    "DEFAULT_HOME", "LOCATION_FILE",
 )
 
 
@@ -99,6 +100,8 @@ def isolated_home(prefix: str = "sweeper-selftest-"):
         util.CHROME_PROFILE = util.Path(tmp) / ".chrome-profile"
         util.CONFIG_FILE = util.Path(tmp) / "config.json"
         util.BACKUP_DIR = util.Path(data) / "backups"
+        util.DEFAULT_HOME = util.Path(tmp) / "home"
+        util.LOCATION_FILE = util.DEFAULT_HOME / "location.txt"
         classify._BASE_CACHE.clear()
         util.ensure_dirs()
         yield util.ROOT
@@ -168,11 +171,19 @@ def test_util(r: Results) -> None:
         finally:
             os.environ.pop("THUNDER_SWEEPER_HOME", None)
 
+        r.eq("默认数据目录=用户目录", util._default_home(), util.DEFAULT_HOME)
+        custom = (util.Path(util.DEFAULT_HOME).parent / "custom-data").resolve()
+        util.set_home(custom)
+        r.eq("set_home 持久化生效", util._default_home(), custom)
+        r.eq("set_home 立即切换 ROOT", util.ROOT, custom)
+        util.set_home(None)
+        r.eq("set_home 恢复默认", util._default_home(), util.DEFAULT_HOME)
+
         frozen_orig = getattr(sys, "frozen", None)
         sys.frozen = True  # type: ignore[attr-defined]
         try:
             home = util._default_home()
-            r.check("打包运行时数据目录在用户目录", str(util.SOURCE_ROOT) not in str(home),
+            r.check("打包运行时数据目录不在源码目录", str(util.SOURCE_ROOT) not in str(home),
                     f"home={home}")
         finally:
             if frozen_orig is None:

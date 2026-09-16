@@ -602,6 +602,22 @@ def cmd_status(args, cfg):
     util.log(f"待删除      : {len(sel.get('delete', []))} 个")
 
 
+def cmd_home(args, cfg):
+    if getattr(args, "reset", False):
+        root = util.set_home(None)
+        util.log(f"已恢复默认数据目录: {root}")
+        util.log("设置已保存，所有新启动的程序都会使用该目录。")
+        return
+    if not getattr(args, "path", None):
+        util.log(f"当前数据目录: {util.ROOT}")
+        util.log(f"默认数据目录: {util.DEFAULT_HOME}")
+        util.log("设置: ./sweeper home <路径>    恢复默认: ./sweeper home --reset")
+        return
+    root = util.set_home(args.path)
+    util.log(f"已设置数据目录: {root}")
+    util.log("设置已保存，所有新启动的程序都会使用该目录。")
+
+
 def _normalize_argv(argv: list[str]) -> list[str]:
     """Allow shorthand: ``-100`` -> ``--more 100``, ``-all`` -> ``--all``."""
     out: list[str] = []
@@ -629,6 +645,10 @@ def main(argv=None):
     p_login = sub.add_parser("login", help="启动调试 Chrome 并抓取迅雷 token")
     p_login.add_argument("--restart", action="store_true", help="先关闭旧的调试 Chrome 再重新启动")
     p_status = sub.add_parser("status", help="查看当前状态")
+
+    p_home = sub.add_parser("home", help="查看/设置数据目录（默认 ~/Library/Application Support/ThunderSweeper）")
+    p_home.add_argument("path", nargs="?", help="新的数据目录；省略则显示当前目录")
+    p_home.add_argument("--reset", action="store_true", help="恢复默认数据目录")
 
     p_inspect = sub.add_parser("inspect", help="打印某视频的 file_info（排查直链用）")
     p_inspect.add_argument("target", help="videos.json 中的序号（从 1 开始，按大小降序）或文件 id")
@@ -688,6 +708,7 @@ def main(argv=None):
         "review": cmd_review,
         "apply": cmd_apply,
         "status": cmd_status,
+        "home": cmd_home,
         "inspect": cmd_inspect,
         "classify": cmd_classify,
         "dedupe": cmd_dedupe,

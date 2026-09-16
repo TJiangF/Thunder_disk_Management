@@ -30,6 +30,7 @@ _MENU = """
   [8] 删除已勾选文件        （移入回收站）
   [9] 查看状态
   [d] 打开数据目录
+  [h] 设置数据目录
   [q] 退出
 """
 
@@ -71,6 +72,21 @@ def _open_dir(path) -> None:
         util.log(f"已打开: {path}")
     except Exception as exc:
         util.log(f"打开目录失败: {exc}", "WARN")
+
+
+def _do_set_home() -> None:
+    """Show the data directory and let the user point it somewhere else."""
+    print("\n数据目录设置（存放 tokens/videos/截图/分类设置等）")
+    print(f"  当前: {util.ROOT}")
+    print(f"  默认: {util.DEFAULT_HOME}")
+    raw = input("  输入新的数据目录（回车=取消，输入 default 恢复默认）: ").strip()
+    if not raw:
+        util.log("已取消")
+    elif raw.lower() in ("default", "默认"):
+        util.log(f"已恢复默认数据目录: {util.set_home(None)}")
+    else:
+        util.log(f"已设置数据目录: {util.set_home(raw)}")
+    util.log("设置已保存，新启动的程序都会使用该目录。")
 
 
 def _do_login(cfg) -> None:
@@ -148,6 +164,8 @@ def _menu_once(cfg) -> bool:
         cli.cmd_status(_ns(), util.load_config())
     elif choice == "d":
         _open_dir(util.ROOT)
+    elif choice == "h":
+        _do_set_home()
     else:
         util.log("无效选项", "WARN")
     return True

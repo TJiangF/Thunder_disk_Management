@@ -18,20 +18,8 @@ APP_VERSION = "1.0.0"
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _default_home() -> Path:
-    """Where user data (tokens, scan results, thumbs, config) lives.
-
-    - ``THUNDER_SWEEPER_HOME`` env var wins (handy for tests / portables).
-    - Running from source keeps everything inside the project folder
-      (backwards compatible with existing installs).
-    - A packaged app (PyInstaller) must not write inside its own bundle,
-      so it uses the platform's user-data directory.
-    """
-    env = os.environ.get("THUNDER_SWEEPER_HOME")
-    if env:
-        return Path(env).expanduser().resolve()
-    if not getattr(sys, "frozen", False):
-        return SOURCE_ROOT
+def _os_home() -> Path:
+    """Platform per-user data directory for this app."""
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / APP_NAME
     if sys.platform.startswith("win"):
@@ -41,23 +29,88 @@ def _default_home() -> Path:
     return Path(base) / APP_NAME
 
 
-ROOT = _default_home()
-DATA_DIR = ROOT / "data"
-THUMB_DIR = DATA_DIR / "thumbs"
-TOKENS_FILE = DATA_DIR / "tokens.json"
-VIDEOS_FILE = DATA_DIR / "videos.json"
-FILES_FILE = DATA_DIR / "files.json"
-CLASSIFIED_FILE = DATA_DIR / "classified.json"
-CLASSIFY_RULES_FILE = DATA_DIR / "classify_rules.json"
-MANUAL_CATS_FILE = DATA_DIR / "manual_categories.json"
-CATEGORIES_FILE = DATA_DIR / "categories.json"
-QUEUE_FILE = DATA_DIR / "queue.json"
-SHOTS_STATE_FILE = DATA_DIR / "shots_state.json"
-SELECTIONS_FILE = DATA_DIR / "selections.json"
-SCAN_STATE_FILE = DATA_DIR / "scan_state.json"
-REVIEW_PROGRESS_FILE = DATA_DIR / "review_progress.json"
-CHROME_PROFILE = ROOT / ".chrome-profile"
-CONFIG_FILE = ROOT / "config.json"
+DEFAULT_HOME = _os_home()
+LOCATION_FILE = DEFAULT_HOME / "location.txt"
+
+
+def _stored_home() -> Path | None:
+    """The custom data root saved via :func:`set_home`, if any."""
+    try:
+        text = LOCATION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text).expanduser().resolve() if text else None
+
+
+def _default_home() -> Path:
+    """Where user data (tokens, scan results, thumbs, config) lives.
+
+    Precedence:
+
+    1. ``THUNDER_SWEEPER_HOME`` env var (portables / scripts / tests);
+    2. a root saved with :func:`set_home` (kept in ``location.txt``);
+    3. the platform user-data dir — on macOS
+       ``~/Library/Application Support/ThunderSweeper``.
+
+    Source runs and the packaged app share the same default.
+    """
+    env = os.environ.get("THUNDER_SWEEPER_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    stored = _stored_home()
+    if stored is not None:
+        return stored
+    return DEFAULT_HOME
+
+
+def _apply_root(root: Path) -> None:
+    """(Re)point every data path at ``root`` for the current process."""
+    g = globals()
+    data = root / "data"
+    g["ROOT"] = root
+    g["DATA_DIR"] = data
+    g["THUMB_DIR"] = data / "thumbs"
+    g["TOKENS_FILE"] = data / "tokens.json"
+    g["VIDEOS_FILE"] = data / "videos.json"
+    g["FILES_FILE"] = data / "files.json"
+    g["CLASSIFIED_FILE"] = data / "classified.json"
+    g["CLASSIFY_RULES_FILE"] = data / "classify_rules.json"
+    g["MANUAL_CATS_FILE"] = data / "manual_categories.json"
+    g["CATEGORIES_FILE"] = data / "categories.json"
+    g["QUEUE_FILE"] = data / "queue.json"
+    g["SHOTS_STATE_FILE"] = data / "shots_state.json"
+    g["SELECTIONS_FILE"] = data / "selections.json"
+    g["SCAN_STATE_FILE"] = data / "scan_state.json"
+    g["REVIEW_PROGRESS_FILE"] = data / "review_progress.json"
+    g["CHROME_PROFILE"] = root / ".chrome-profile"
+    g["CONFIG_FILE"] = root / "config.json"
+    g["BACKUP_DIR"] = data / "backups"
+
+
+_apply_root(_default_home())
+
+
+def set_home(path=None) -> Path:
+    """Change the data root, persist it and apply it to the current process.
+
+    ``path`` empty/``None`` resets to the default location.  The choice is saved
+    to ``<default>/location.txt`` so it survives restarts, for both the source
+    runner and the packaged app.
+    """
+    DEFAULT_HOME.mkdir(parents=True, exist_ok=True)
+    if path:
+        root = Path(path).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        LOCATION_FILE.write_text(str(root), encoding="utf-8")
+    else:
+        root = DEFAULT_HOME
+        try:
+            LOCATION_FILE.unlink()
+        except OSError:
+            pass
+    _apply_root(root)
+    ensure_dirs()
+    return root
 
 DEFAULT_CONFIG = {
     "chrome_path": "",  # 留空则自动探测（Chrome/Edge/Brave/Chromium）
@@ -155,7 +208,6 @@ def read_json(path: Path, default=None):
         return default
 
 
-BACKUP_DIR = DATA_DIR / "backups"
 _BACKUP_NAMES = {
     "categories.json", "classify_rules.json", "manual_categories.json",
     "selections.json", "review_progress.json", "config.json",
