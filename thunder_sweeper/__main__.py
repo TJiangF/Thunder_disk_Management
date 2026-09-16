@@ -44,12 +44,17 @@ def cmd_scan(args, cfg):
     api = thunder_api.ThunderAPI(provider, cfg)
 
     state: dict = {}
-    if args.resume:
+    if args.resume and not getattr(args, "fresh", False):
         loaded = util.read_json(util.SCAN_STATE_FILE)
-        if loaded:
+        frontier = (loaded or {}).get("frontier") or []
+        if loaded and frontier:
             state = loaded
-            util.log(f"从上次进度恢复：已访问 {len(state.get('visited', []))} 个目录，"
+            util.log(f"从上次中断处继续：还有 {len(frontier)} 个目录待扫描，"
                      f"已收集 {len(state.get('videos', []))} 个视频")
+        elif loaded:
+            util.log("上次扫描已完成，本次重新完整扫描（以发现新增的文件/文件夹）")
+        else:
+            util.log("未找到上次扫描进度，本次为全新扫描")
 
     last_save = {"t": 0.0}
 
@@ -673,6 +678,8 @@ def main(argv=None):
 
     p_scan = sub.add_parser("scan", help="递归扫描整个网盘，收集视频并按大小排序")
     p_scan.add_argument("--resume", action="store_true", help="从上次扫描进度继续")
+    p_scan.add_argument("--fresh", action="store_true",
+                        help="忽略上次进度，重新完整扫描（发现新增/删除的文件与文件夹）")
     p_scan.add_argument("--limit", type=int, help="只保留最大的 N 个")
     p_scan.add_argument("--min-size", type=float, metavar="MB", help="只保留大于该大小的视频(MB)")
 

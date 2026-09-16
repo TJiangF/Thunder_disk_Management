@@ -72,7 +72,7 @@ cd /Users/tf/thunder_video_sweeper
 | `./sweeper login [--restart]` | 启动调试 Chrome 抓取 token（`--restart` 先关掉残留的调试 Chrome） |
 | `./sweeper status` | 查看登录状态 / 视频数 / 待删数 |
 | `./sweeper home [路径] [--reset]` | 查看/设置数据目录（默认 `~/Library/Application Support/ThunderSweeper`；省略路径则显示当前） |
-| `./sweeper scan [--resume] [--limit N] [--min-size MB]` | 递归扫描网盘，视频按大小降序写 `data/videos.json` |
+| `./sweeper scan [--resume] [--fresh] [--limit N] [--min-size MB]` | 递归扫描网盘，视频按大小降序写 `data/videos.json`（`--resume` 续扫；上次已完成会自动完整重扫；`--fresh` 强制完整重扫） |
 | `./sweeper classify` | 按命名规则分类，写 `data/classified.json` |
 | `./sweeper dedupe` | 扫描重复文件（同大小+名称相似/同番号），写 `data/duplicates.json` |
 | `./sweeper organize [--apply] [--limit N] [--delete-folders] [--clean-junk] [--include-other] [--no-rescan] [--yes]` | 整理全套：预览 / 移动 / 删空的源文件夹 / 递归删垃圾文件夹；执行后**自动重扫+分类**（`--no-rescan` 可关） |
@@ -104,12 +104,15 @@ cd /Users/tf/thunder_video_sweeper
 ### 3.2 扫描
 
 ```bash
-./sweeper scan --resume          # 中断后从上次进度继续
+./sweeper scan                   # 完整扫描（推荐，能发现新增/删除）
+./sweeper scan --resume          # 上次被中断则接着扫；若上次已完成则自动改为完整扫描
+./sweeper scan --fresh           # 强制忽略上次进度，完整重扫
 ./sweeper scan --min-size 500    # 只看大于 500MB 的
 ```
 
 - 结果写入 `data/videos.json`（按大小降序），进度写入 `data/scan_state.json`。
-- 全盘较慢属正常，随时 `Ctrl+C`，下次加 `--resume`。
+- **新增的文件夹/文件必须完整扫描才会被发现**：`--resume` 会跳过“已扫过的目录”，因此只用于“上次被中断时接着扫”；若上次已扫完，它会**自动转为完整扫描**（否则会秒结束、看不到新增内容）。
+- 全盘较慢属正常，随时 `Ctrl+C`，下次加 `--resume` 接着扫。
 
 ### 3.3 分类
 
