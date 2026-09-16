@@ -211,12 +211,12 @@ def cpu_count() -> int:
 
 
 def cap_workers(n) -> int:
-    """Clamp a requested worker count to [1, cpu_count()]."""
+    """Coerce a requested worker count to a positive integer (no upper cap)."""
     try:
         n = int(n)
     except (TypeError, ValueError):
         n = 1
-    return max(1, min(n, cpu_count()))
+    return max(1, n)
 
 
 def sleep(seconds: float) -> None:
@@ -486,23 +486,29 @@ class LiveDisplay:
         label = f"  {self.label}" if self.label else ""
         return f"[{self._bar()}] {self.done}/{self.total}{extra}{label}"
 
-    def _lines(self) -> list[str]:
-        cols = shutil.get_terminal_size((100, 24)).columns
-        limit = max(0, cols - 1)
-        lines = [self._summary()]
+    def _lines(self, limit: int):
+        bar = self._summary()
+        workers = []
         for i in range(self.slots):
             text = self.tasks[i] if i < len(self.tasks) else ""
-            lines.append(("  " + text)[:limit] if text else "")
+            workers.append(("  " + text)[:limit] if text else "")
+        console = []
         if self.console_lines:
-            lines.append(("  ── 日志 ──")[:limit])
+            console.append(("  ── 日志 ──")[:limit])
             recent = list(reversed(self._history[-self.console_lines:]))
             for j in range(self.console_lines):
-                lines.append(("  " + recent[j])[:limit] if j < len(recent) else "")
-        return lines
+                console.append(("  " + recent[j])[:limit] if j < len(recent) else "")
+        return bar, workers, console
 
     def _region_locked(self) -> tuple[int, list[str]]:
-        lines = self._lines()
+        cols = shutil.get_terminal_size((100, 24)).columns
         rows = shutil.get_terminal_size((100, 24)).lines
+        limit = max(0, cols - 1)
+        bar, workers, console = self._lines(limit)
+        room = rows - 1 - len(console)
+        if room < len(workers):
+            workers = workers[: max(0, room)]
+        lines = [bar, *workers, *console]
         if len(lines) > rows:
             lines = lines[:rows]
         top = max(1, rows - len(lines) + 1)
@@ -521,7 +527,7 @@ class LiveDisplay:
 
     def _clear_region_locked(self) -> int:
         rows = shutil.get_terminal_size((100, 24)).lines
-        top = max(1, rows - len(self._lines()) + 1)
+        top, _ = self._region_locked()
         buf = []
         for row in range(top, rows + 1):
             buf.append(f"\033[{row};1H\033[2K")

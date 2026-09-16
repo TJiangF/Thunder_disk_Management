@@ -142,7 +142,7 @@ def test_util(r: Results) -> None:
         r.eq("人类可读时长", util.human_duration(3725), "1:02:05")
         r.eq("时长空值", util.human_duration(None), "-")
         r.check("cpu_count>0", util.cpu_count() >= 1)
-        r.eq("cap_workers 上限", util.cap_workers(10_000), util.cpu_count())
+        r.eq("cap_workers 不设上限", util.cap_workers(10_000), 10_000)
         r.eq("cap_workers 下限", util.cap_workers(0), 1)
 
         util.atomic_write_json(util.CATEGORIES_FILE, {"a": 1})

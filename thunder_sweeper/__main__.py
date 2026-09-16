@@ -167,7 +167,7 @@ def cmd_shots(args, cfg):
     requested = int(getattr(args, "workers", 0) or cfg.get("workers", 3))
     workers = util.cap_workers(requested)
     if workers != requested:
-        util.log(f"并发上限为 CPU 线程数 {util.cpu_count()}，已从 {requested} 调整为 {workers}", "WARN")
+        util.log(f"并发数 {requested} 无效，已调整为 {workers}", "WARN")
     total = sum(v.get("size", 0) for v in videos)
     util.log(f"准备为 {len(videos)} 个视频生成截图（共 {util.human_size(total)}），并发 {workers}")
 
@@ -276,7 +276,7 @@ def cmd_review(args, cfg):
             requested = int(workers or cfg.get("workers", 3))
             workers = util.cap_workers(requested)
             if workers != requested:
-                util.log(f"并发上限为 CPU 线程数 {util.cpu_count()}，已从 {requested} 调整为 {workers}", "WARN")
+                util.log(f"并发数 {requested} 无效，已调整为 {workers}", "WARN")
             util.log(f"网页截图任务：{len(selected)} 个，并发 {workers}")
             screenshots.process_many(provider, selected, cfg, workers=workers,
                                      progress=on_progress, on_done=on_done)

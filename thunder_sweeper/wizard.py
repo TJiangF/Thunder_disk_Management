@@ -94,12 +94,10 @@ def _do_shots(cfg) -> None:
     done = sum(1 for v in videos if screenshots.disk_thumbs(v.get("id"), needed))
     print(f"\n生成截图（每个视频 8 张，用于网页审核）")
     print(f"  当前已截图 {done} 个 / 共 {len(videos)} 个视频")
-    print(f"  本机 CPU 线程数：{cpu}，并发不会超过这个值")
+    print(f"  本机 CPU 线程数：{cpu}（并发可超过它，按需设置）")
     count = util.prompt_int("  本次新增截图数量（在已完成基础上继续）", 50, minimum=1)
-    default_workers = min(int(cfg.get("workers", 3) or 3), cpu)
-    workers = util.prompt_int("  并发数量", default_workers, minimum=1, maximum=cpu)
-    if workers > cpu:
-        workers = cpu
+    default_workers = max(1, int(cfg.get("workers", 3) or 3))
+    workers = util.prompt_int("  并发数量", default_workers, minimum=1)
     print(f"  → 在已完成 {done} 个的基础上，再截图 {count} 个，并发 {workers}\n")
     cli.cmd_shots(_ns(top=count, more=count, all=False, ids=None, min_size=None,
                       no_resume=False, retry_failed=False, workers=workers),
