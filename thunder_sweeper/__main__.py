@@ -191,23 +191,21 @@ def cmd_shots(args, cfg):
         live.start()
     else:
         bar.start()
+    interrupted = False
     try:
         screenshots.process_many(provider, videos, cfg, workers=workers,
                                  progress=progress, on_done=on_done, live=live)
     except KeyboardInterrupt:
-        if live is not None:
-            live.finish(label="已中断")
-        elif bar._tty:
-            bar.stream.write("\n")
-        util.atomic_write_json(util.QUEUE_FILE, videos)
-        util.log("已中断，进度已保存", "WARN")
+        interrupted = True
         raise
     finally:
         util.atomic_write_json(util.QUEUE_FILE, videos)
-    if live is not None:
-        live.finish()
-    else:
-        bar.finish()
+        if live is not None:
+            live.finish(label="已中断" if interrupted else None)
+        elif bar is not None:
+            bar.finish()
+        if interrupted:
+            util.log("已中断，进度已保存", "WARN")
 
     failed = [v for v in videos if not v.get("done")]
     done = len(videos) - len(failed)

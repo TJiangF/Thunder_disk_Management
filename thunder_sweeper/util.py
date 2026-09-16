@@ -9,7 +9,6 @@ import sys
 import tempfile
 import threading
 import time
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -95,7 +94,23 @@ def ensure_dirs() -> None:
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
 
+_live_sink = None
+
+
+def set_live_sink(fn) -> None:
+    """While a live panel is active, route :func:`log` output into it."""
+    global _live_sink
+    _live_sink = fn
+
+
 def log(message: str, level: str = "INFO") -> None:
+    sink = _live_sink
+    if sink is not None:
+        try:
+            sink(message, level)
+            return
+        except Exception:
+            pass
     color = _COLORS.get(level, "")
     ts = datetime.now().strftime("%H:%M:%S")
     use_color = sys.stderr.isatty()
@@ -352,22 +367,24 @@ class ProgressBar:
 
 
 class LiveDisplay:
-    """In-place, multi-line progress display for long batch jobs.
+    """Fixed-position status panel for long batch jobs.
 
-    Layout::
+    The panel is anchored to the **bottom of the terminal** and redrawn in place
+    with absolute cursor addressing, so it never scrolls or jumps::
 
-        [██████░░░░░░░░] 12/50 ✓10 ✗2  截图
-          文件名A.mp4              截图 3/8
-          文件名B.mp4              取直链
+        [██████░░░░░░░░] 12/50 ✓10 ✗2  截图      <- progress bar (fixed row)
+          线程1  文件名A.mp4      截图 3/8
+          线程2  文件名B.mp4      取直链
           ── 日志 ──
-          [警告] xxx 第 4/8 张超时
+          12:01:05  文件名B.mp4 仅生成 6/8 张    <- newest message on top
+          12:01:02  第 4/8 张超时，放弃剩余帧
+          12:00:58  开始截图：目标 50 个，并发 3
 
-    The top line is the overall progress bar; the next ``slots`` lines are one
-    per worker, showing the file it is currently working on; below them a fixed
-    console window keeps the most recent ``console_lines`` debug/exception
-    messages (auto-scrolling).  The whole block is redrawn in place on every
-    update and from a background ticker, so the terminal never scrolls.  When
-    ``stream`` is not a tty it stays silent and only prints on :meth:`finish`.
+    The console keeps the most recent ``console_lines`` messages with the newest
+    on top (older ones shift down); the full history is retained in memory.  While
+    the panel is active every :func:`log` call is routed into the console, so no
+    other output can disturb the layout.  When ``stream`` is not a tty the panel
+    stays silent and only prints a summary on :meth:`finish`.
     """
 
     def __init__(self, total: int, slots: int = 1, label: str = "",
@@ -384,9 +401,8 @@ class LiveDisplay:
         self.ok = 0
         self.fail = 0
         self.tasks: list[str] = []
-        self._console = deque(maxlen=self.console_lines) if self.console_lines else None
+        self._history: list[str] = []
         self._lock = threading.RLock()
-        self._drawn = 0
         self._tty = bool(getattr(self.stream, "isatty", lambda: False)())
         self._stop = threading.Event()
         self._thread = None
@@ -394,6 +410,9 @@ class LiveDisplay:
     def start(self) -> None:
         if not self._tty:
             return
+        set_live_sink(self._receive_log)
+        self.stream.write("\033[?25l")
+        self.stream.flush()
         self._thread = threading.Thread(target=self._tick, daemon=True)
         self._thread.start()
         with self._lock:
@@ -417,30 +436,24 @@ class LiveDisplay:
             self._render_locked()
 
     def console(self, message: str) -> None:
-        """Append a debug/exception line to the scrolling console area."""
+        """Append a message to the console area (newest shown on top)."""
         line = f"{datetime.now().strftime('%H:%M:%S')}  {message}"
         with self._lock:
-            if not self._tty or self._console is None:
+            if not self._tty:
                 print(line, file=self.stream, flush=True)
                 return
-            self._console.append(line)
+            self._history.append(line)
             self._render_locked()
 
     def log(self, message: str) -> None:
-        with self._lock:
-            if not self._tty:
-                print(message, file=self.stream, flush=True)
-                return
-            self._erase_locked()
-            self.stream.write(message + "\n")
-            self.stream.flush()
-            self._render_locked()
+        self.console(message)
 
     def finish(self, label: str | None = None) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+        set_live_sink(None)
         if label is not None:
             self.label = label
         summary = self._summary()
@@ -448,9 +461,15 @@ class LiveDisplay:
             if not self._tty:
                 print(summary, file=self.stream, flush=True)
                 return
-            self._erase_locked()
+            top = self._clear_region_locked()
+            self.stream.write("\033[?25h")
+            self.stream.write(f"\033[{top};1H")
             self.stream.write(summary + "\n")
             self.stream.flush()
+
+    def _receive_log(self, message, level: str = "INFO") -> None:
+        prefix = f"[{level}] " if level and level != "INFO" else ""
+        self.console(prefix + str(message))
 
     def _tick(self) -> None:
         while not self._stop.wait(self.interval):
@@ -476,43 +495,37 @@ class LiveDisplay:
             lines.append(("  " + text)[:limit] if text else "")
         if self.console_lines:
             lines.append(("  ── 日志 ──")[:limit])
-            msgs = list(self._console) if self._console is not None else []
+            recent = list(reversed(self._history[-self.console_lines:]))
             for j in range(self.console_lines):
-                lines.append(("  " + str(msgs[j]))[:limit] if j < len(msgs) else "")
+                lines.append(("  " + recent[j])[:limit] if j < len(recent) else "")
         return lines
+
+    def _region_locked(self) -> tuple[int, list[str]]:
+        lines = self._lines()
+        rows = shutil.get_terminal_size((100, 24)).lines
+        if len(lines) > rows:
+            lines = lines[:rows]
+        top = max(1, rows - len(lines) + 1)
+        return top, lines
 
     def _render_locked(self) -> None:
         if not self._tty:
             return
-        lines = self._lines()
-        count = len(lines)
+        cols = shutil.get_terminal_size((100, 24)).columns
+        top, lines = self._region_locked()
         buf = []
-        if self._drawn:
-            up = self._drawn - 1
-            if up > 0:
-                buf.append(f"\033[{up}A")
-            buf.append("\r")
         for i, line in enumerate(lines):
-            buf.append("\033[2K" + line)
-            if i != count - 1:
-                buf.append("\n")
+            buf.append(f"\033[{top + i};1H\033[2K{line[:cols - 1]}")
         self.stream.write("".join(buf))
         self.stream.flush()
-        self._drawn = count
 
-    def _erase_locked(self) -> None:
-        if not self._tty or not self._drawn:
-            return
-        count = self._drawn
+    def _clear_region_locked(self) -> int:
+        rows = shutil.get_terminal_size((100, 24)).lines
+        top = max(1, rows - len(self._lines()) + 1)
         buf = []
-        up = count - 1
-        if up > 0:
-            buf.append(f"\033[{up}A")
-        buf.append("\r")
-        for i in range(count):
-            buf.append("\033[2K")
-            if i != count - 1:
-                buf.append("\n")
+        for row in range(top, rows + 1):
+            buf.append(f"\033[{row};1H\033[2K")
+        buf.append(f"\033[{top};1H")
         self.stream.write("".join(buf))
         self.stream.flush()
-        self._drawn = 0
+        return top
