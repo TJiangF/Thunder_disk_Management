@@ -366,11 +366,16 @@ class ProgressBar:
             self.stream.flush()
 
 
+def _oneline(text) -> str:
+    """Collapse any whitespace (incl. newlines) so a value can be shown on one row."""
+    return " ".join(str(text).split())
+
+
 class LiveDisplay:
     """Fixed-position status panel for long batch jobs.
 
-    The panel is anchored to the **bottom of the terminal** and redrawn in place
-    with absolute cursor addressing, so it never scrolls or jumps::
+    Layout (anchored to the bottom of the terminal, redrawn in place so it never
+    scrolls or jumps)::
 
         [██████░░░░░░░░] 12/50 ✓10 ✗2  截图      <- progress bar (fixed row)
           线程1  文件名A.mp4      截图 3/8
@@ -381,10 +386,11 @@ class LiveDisplay:
           12:00:58  开始截图：目标 50 个，并发 3
 
     The console keeps the most recent ``console_lines`` messages with the newest
-    on top (older ones shift down); the full history is retained in memory.  While
-    the panel is active every :func:`log` call is routed into the console, so no
-    other output can disturb the layout.  When ``stream`` is not a tty the panel
-    stays silent and only prints a summary on :meth:`finish`.
+    on top (older ones shift down); the full history is retained in memory.  All
+    text is flattened to a single line, and while the panel is active every
+    :func:`log` call is routed into the console, so nothing can scroll the screen
+    and duplicate the bar.  When ``stream`` is not a tty the panel stays silent
+    and only prints a summary on :meth:`finish`.
     """
 
     def __init__(self, total: int, slots: int = 1, label: str = "",
@@ -432,12 +438,12 @@ class LiveDisplay:
 
     def set_tasks(self, tasks) -> None:
         with self._lock:
-            self.tasks = [str(t) for t in tasks]
+            self.tasks = [_oneline(t) for t in tasks]
             self._render_locked()
 
     def console(self, message: str) -> None:
         """Append a message to the console area (newest shown on top)."""
-        line = f"{datetime.now().strftime('%H:%M:%S')}  {message}"
+        line = f"{datetime.now().strftime('%H:%M:%S')}  {_oneline(message)}"
         with self._lock:
             if not self._tty:
                 print(line, file=self.stream, flush=True)
@@ -500,33 +506,42 @@ class LiveDisplay:
                 console.append(("  " + recent[j])[:limit] if j < len(recent) else "")
         return bar, workers, console
 
+    def _size(self) -> tuple[int, int]:
+        try:
+            size = os.get_terminal_size(self.stream.fileno())
+            return size.lines, size.columns
+        except (AttributeError, ValueError, OSError):
+            size = shutil.get_terminal_size((100, 24))
+            return size.lines, size.columns
+
     def _region_locked(self) -> tuple[int, list[str]]:
-        cols = shutil.get_terminal_size((100, 24)).columns
-        rows = shutil.get_terminal_size((100, 24)).lines
+        rows, cols = self._size()
+        usable = max(1, rows - 1)
         limit = max(0, cols - 1)
         bar, workers, console = self._lines(limit)
-        room = rows - 1 - len(console)
+        room = usable - 1 - len(console)
         if room < len(workers):
             workers = workers[: max(0, room)]
         lines = [bar, *workers, *console]
-        if len(lines) > rows:
-            lines = lines[:rows]
-        top = max(1, rows - len(lines) + 1)
+        if len(lines) > usable:
+            lines = lines[:usable]
+        top = max(1, usable - len(lines) + 1)
         return top, lines
 
     def _render_locked(self) -> None:
         if not self._tty:
             return
-        cols = shutil.get_terminal_size((100, 24)).columns
+        rows, cols = self._size()
         top, lines = self._region_locked()
+        limit = max(0, cols - 1)
         buf = []
         for i, line in enumerate(lines):
-            buf.append(f"\033[{top + i};1H\033[2K{line[:cols - 1]}")
+            buf.append(f"\033[{top + i};1H\033[2K{line[:limit]}")
         self.stream.write("".join(buf))
         self.stream.flush()
 
     def _clear_region_locked(self) -> int:
-        rows = shutil.get_terminal_size((100, 24)).lines
+        rows, _ = self._size()
         top, _ = self._region_locked()
         buf = []
         for row in range(top, rows + 1):
