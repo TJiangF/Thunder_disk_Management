@@ -94,9 +94,13 @@ PAGE = r"""<!doctype html>
   /* review cards */
   .cards { display: grid; grid-template-columns: 1fr; gap: 14px; }
   .card { background: #1b1e24; border: 1px solid #2a2e35; border-radius: 12px; overflow: hidden;
-          scroll-margin-top: 90px; position: relative; }
-  .card-cat { position: absolute; top: 8px; right: 10px; z-index: 4; }
-  .card .head { padding-right: 150px; }
+          scroll-margin-top: 170px; position: relative; }
+  .card-cat { position: absolute; top: 8px; right: 10px; z-index: 4;
+              display: flex; align-items: center; gap: 10px; }
+  .card .head { padding-right: 320px; }
+  .review-bar { position: sticky; top: var(--header-h, 104px); z-index: 20;
+                background: rgba(20,22,26,.97); backdrop-filter: blur(6px);
+                padding: 8px 0; border-bottom: 1px solid #232a33; }
   .card.marked { border-color: #f0b429; box-shadow: 0 0 0 1px #f0b429 inset; }
   .card.resume { border-color: #2f6fed; box-shadow: 0 0 0 2px #2f6fed inset; }
   .head { display: flex; gap: 10px; padding: 10px 12px; align-items: flex-start; }
@@ -262,7 +266,7 @@ PAGE = r"""<!doctype html>
     </tr></thead><tbody id="tbody"></tbody></table>
   </section>
   <section id="view-review" class="hidden">
-    <div class="row" style="margin-bottom:10px">
+    <div class="row review-bar">
       <span class="stat">截图：</span>
       <input id="shotsN" type="number" value="100" min="1"
              style="width:90px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:5px 8px">
@@ -1253,7 +1257,7 @@ function renderReview() {
       '<img loading="lazy" src="/thumb/' + encodeURIComponent(v.id) + '/' + (i2+1) +
       '" onclick="zoom(this.src); event.stopPropagation();">').join('');
     card.innerHTML =
-      '<div class="card-cat">' + catSelect(v) + '</div>' +
+      '<div class="card-cat">' + starsHtml(v.id) + catSelect(v) + '</div>' +
       '<div class="head"><input type="checkbox" onchange="toggle(this)">' +
         '<div class="meta"><div class="name">' + esc(v.name) +
           '<a class="play" href="#" data-id="' + v.id + '" onclick="return playHere(event,this)">▶ 播放</a>' +
@@ -1262,8 +1266,7 @@ function renderReview() {
         '<div class="sub"><span class="badge">' + fmtSize(v.size) + '</span>' +
         '<span class="badge">' + fmtDur(v.duration) + '</span>' +
         '<span class="badge">' + res + '</span>' +
-        '<button class="mark" data-idx="' + i + '" onclick="markHere(this)">📍 标记进度</button></div>' +
-        '<div class="sub">' + starsHtml(v.id) + '</div></div></div>' +
+        '<button class="mark" data-idx="' + i + '" onclick="markHere(this)">📍 标记进度</button></div></div></div>' +
       '<div class="thumbs">' + thumbs + '</div>';
     card.addEventListener('click', ev => {
       if (ev.target.closest('img, a, button, input, select, option')) return;
@@ -1585,8 +1588,16 @@ function setTab(t) {
 }
 window.addEventListener('resize', () => { if (tab === 'files') renderFiles(); });
 
+/* keep the sticky review toolbar right under the sticky header */
+function syncHeaderHeight() {
+  const h = document.querySelector('header');
+  if (h) document.documentElement.style.setProperty('--header-h', h.offsetHeight + 'px');
+}
+window.addEventListener('resize', syncHeaderHeight);
+
 rebuild();
 render();
+syncHeaderHeight();
 _bindTableDrag();
 populateBatchSelect();
 </script>
