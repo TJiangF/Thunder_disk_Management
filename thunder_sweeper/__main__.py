@@ -266,7 +266,7 @@ def cmd_review(args, cfg):
 
     shots_fn = None
     if api is not None:
-        def shots_fn(mode, count, workers, on_progress):
+        def shots_fn(mode, count, workers, on_progress, stop=None):
             needed = len(cfg["fractions"])
             state = _load_shots_state()
             state_lock = threading.Lock()
@@ -284,7 +284,7 @@ def cmd_review(args, cfg):
                 util.log(f"并发数 {requested} 无效，已调整为 {workers}", "WARN")
             util.log(f"网页截图任务：{len(selected)} 个，并发 {workers}")
             screenshots.process_many(provider, selected, cfg, workers=workers,
-                                     progress=on_progress, on_done=on_done)
+                                     progress=on_progress, on_done=on_done, stop=stop)
             util.atomic_write_json(util.QUEUE_FILE, [v for v in videos if v.get("thumbs")])
             return selected
 

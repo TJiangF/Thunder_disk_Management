@@ -264,8 +264,9 @@ PAGE = r"""<!doctype html>
              style="width:90px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:5px 8px">
       <button onclick="runShots('more', parseInt(document.getElementById('shotsN').value)||100)">继续截图 N 个</button>
       <button onclick="runShots('all')">全部截图</button>
+      <button class="danger" onclick="stopShots()">停止</button>
       <span class="stat" style="margin-left:10px">并发</span>
-      <input id="shotsW" type="number" value="3" min="1" max="8"
+      <input id="shotsW" type="number" value="3" min="1"
              style="width:56px;background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:5px 8px">
       <span class="stat" style="margin-left:12px">排序：</span>
       <select id="review-sort" onchange="renderReview()"
@@ -1370,16 +1371,25 @@ async function runShots(mode, count) {
     pollShots();
   } catch (e) { msg.textContent = '失败：' + e; }
 }
+async function stopShots() {
+  const msg = document.getElementById('shots-msg');
+  try {
+    await fetch('/shots/stop', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: '{}'});
+    if (msg) msg.textContent = '正在停止…（等待当前文件结束）';
+  } catch (e) {}
+}
 function pollShots() {
   fetch('/shots/status').then(r => r.json()).then(s => {
     const msg = document.getElementById('shots-msg');
     if (s.running) {
-      msg.textContent = '截图中 ' + s.current + '/' + (s.total || '?') + ' — ' + (s.name || '');
+      msg.textContent = (s.stopped ? '停止中… ' : '截图中 ') + s.current + '/' + (s.total || '?') +
+                        ' — ' + (s.name || '');
       setTimeout(pollShots, 1000);
     } else if (s.error) {
       msg.textContent = '截图出错：' + s.error;
     } else if (s.finished) {
-      msg.textContent = '截图完成';
+      msg.textContent = s.stopped ? '已停止' : '截图完成';
       for (const u of (s.updated || [])) {
         const v = byId[u.id];
         if (v) { v.thumbs = u.thumbs; v.done = u.done; v.duration = u.duration || v.duration;
@@ -1654,8 +1664,9 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
     submitted: dict = {"done": False, "selections": None}
     httpd_holder: dict = {}
     shots_state = {"running": False, "finished": False, "current": 0, "total": 0,
-                   "name": "", "error": None, "updated": []}
+                   "name": "", "error": None, "updated": [], "stopped": False}
     shots_lock = threading.Lock()
+    shots_stop = threading.Event()
     apply_state = {"running": False, "finished": False, "current": 0, "total": 0,
                    "error": None, "results": []}
     apply_lock = threading.Lock()
@@ -1722,12 +1733,13 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 apply_state["finished"] = True
 
     def _shots_worker(mode: str, count: int, workers: int) -> None:
+        shots_stop.clear()
         try:
             def on_progress(i, total, video):
                 with shots_lock:
                     shots_state.update(current=i, total=total, name=video.get("name"))
 
-            selected = shots_fn(mode, count, workers, on_progress)
+            selected = shots_fn(mode, count, workers, on_progress, stop=shots_stop)
             with shots_lock:
                 shots_state["updated"] = [{
                     "id": v["id"], "thumbs": v.get("thumbs") or [], "done": v.get("done"),
@@ -1985,7 +1997,7 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                             ensure_ascii=False).encode("utf-8"), "application/json")
                         return
                     shots_state.update(running=True, finished=False, current=0, total=0,
-                                       name="", error=None, updated=[])
+                                       name="", error=None, updated=[], stopped=False)
                 mode = data.get("mode") or "more"
                 try:
                     count = int(data.get("count") or 100)
@@ -1999,6 +2011,16 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 threading.Thread(target=_shots_worker, args=(mode, count, workers),
                                  daemon=True).start()
                 self._send(200, b'{"ok":true}', "application/json")
+                return
+
+            if path == "/shots/stop":
+                with shots_lock:
+                    was = shots_state["running"]
+                    shots_state["stopped"] = True
+                shots_stop.set()
+                util.log("收到停止截图指令，正在停止…", "WARN")
+                self._send(200, json.dumps({"ok": True, "running": bool(was)},
+                                           ensure_ascii=False).encode("utf-8"), "application/json")
                 return
 
             if path == "/shutdown":

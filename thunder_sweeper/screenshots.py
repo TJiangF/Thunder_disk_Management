@@ -172,7 +172,7 @@ def disk_thumbs(video_id, needed: int) -> list[str]:
 
 
 def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = None,
-                 progress=None, on_done=None, live=None) -> list[dict]:
+                 progress=None, on_done=None, live=None, stop=None) -> list[dict]:
     """Screenshot many videos concurrently.
 
     Each worker thread gets its own ThunderAPI (own requests.Session); token
@@ -193,7 +193,7 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
     in_flight: dict = {}
     order: list = []
     inflight_lock = threading.Lock()
-    stop = threading.Event()
+    hb_stop = threading.Event()
     if live is not None:
         live.console(f"开始截图：目标 {len(videos)} 个，并发 {workers}")
 
@@ -213,6 +213,8 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
             live.set_tasks(snapshot())
 
     def task(video):
+        if stop is not None and stop.is_set():
+            return video
         key = id(video)
         name = video.get("name") or str(video.get("id"))
         with inflight_lock:
@@ -231,7 +233,8 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
             process_video(get_api(), video, cfg, resume=True,
                           verbose=(workers == 1 and live is None),
                           status=(report if live is not None else None),
-                          debug=(live.console if live is not None else None))
+                          debug=(live.console if live is not None else None),
+                          stop=stop)
         except Exception as exc:
             video["error"] = str(exc)
             if live is not None:
@@ -260,7 +263,7 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
         return video
 
     def heartbeat():
-        while not stop.wait(15):
+        while not hb_stop.wait(15):
             with inflight_lock:
                 names = [v["name"] for v in in_flight.values()]
             if names:
@@ -291,7 +294,7 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
             else:
                 ex.shutdown(wait=False)
     finally:
-        stop.set()
+        hb_stop.set()
     return videos
 
 
@@ -308,7 +311,7 @@ def _fresh_url(api, file_id: str, cfg: dict) -> str:
 
 def process_video(api, video: dict, cfg: dict, resume: bool = True,
                   fractions: list[float] | None = None, verbose: bool = True,
-                  status=None, debug=None) -> dict:
+                  status=None, debug=None, stop=None) -> dict:
     from . import thunder_api
 
     def say(message, level="INFO"):
@@ -320,6 +323,11 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
             return
         if verbose:
             util.log(message, level)
+
+    if stop is not None and stop.is_set():
+        video["error"] = "已停止"
+        video["done"] = False
+        return video
 
     short = video.get("name") or str(video.get("id"))
 
@@ -395,6 +403,9 @@ def process_video(api, video: dict, cfg: dict, resume: bool = True,
     thumbs: list[str] = []
     timeouts = 0
     for i, seconds in enumerate(times, start=1):
+        if stop is not None and stop.is_set():
+            say(f"[{name}] 已停止，跳过剩余 {needed - i + 1} 张", "WARN")
+            break
         out_path = out_dir / f"{i}.jpg"
         if resume and out_path.exists() and out_path.stat().st_size > 0:
             thumbs.append(rel(out_path))

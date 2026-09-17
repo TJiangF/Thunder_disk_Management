@@ -111,12 +111,26 @@ def _do_shots(cfg) -> None:
     print(f"\n生成截图（每个视频 8 张，用于网页审核）")
     print(f"  当前已截图 {done} 个 / 共 {len(videos)} 个视频")
     print(f"  本机 CPU 线程数：{cpu}（并发可超过它，按需设置）")
-    count = util.prompt_int("  本次新增截图数量（在已完成基础上继续）", 50, minimum=1)
+    raw = input("  本次新增截图数量（数字，或输入 all 截全部；回车默认 50）: ").strip().lower()
+    if raw in ("all", "a", "-all", "全部", "所有", "all!"):
+        count, all_mode = None, True
+    else:
+        all_mode = False
+        try:
+            count = int(raw) if raw else 50
+        except ValueError:
+            count = 50
+        if count < 1:
+            count = 1
     default_workers = max(1, int(cfg.get("workers", 3) or 3))
     workers = util.prompt_int("  并发数量", default_workers, minimum=1)
-    print(f"  → 在已完成 {done} 个的基础上，再截图 {count} 个，并发 {workers}\n")
-    cli.cmd_shots(_ns(top=count, more=count, all=False, ids=None, min_size=None,
-                      no_resume=False, retry_failed=False, workers=workers),
+    if all_mode:
+        print(f"  → 截图全部剩余视频，并发 {workers}\n")
+    else:
+        print(f"  → 在已完成 {done} 个的基础上，再截图 {count} 个，并发 {workers}\n")
+    cli.cmd_shots(_ns(top=count or 10, more=None if all_mode else count, all=all_mode,
+                      ids=None, min_size=None, no_resume=False, retry_failed=False,
+                      workers=workers),
                   util.load_config())
 
 
