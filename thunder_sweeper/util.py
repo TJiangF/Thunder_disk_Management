@@ -82,6 +82,7 @@ def _apply_root(root: Path) -> None:
     g["SELECTIONS_FILE"] = data / "selections.json"
     g["SCAN_STATE_FILE"] = data / "scan_state.json"
     g["REVIEW_PROGRESS_FILE"] = data / "review_progress.json"
+    g["RATINGS_FILE"] = data / "ratings.json"
     g["CHROME_PROFILE"] = root / ".chrome-profile"
     g["CONFIG_FILE"] = root / "config.json"
     g["BACKUP_DIR"] = data / "backups"

@@ -69,7 +69,7 @@ _PATCH_ATTRS = (
     "CLASSIFIED_FILE", "CLASSIFY_RULES_FILE", "MANUAL_CATS_FILE", "CATEGORIES_FILE",
     "QUEUE_FILE", "SHOTS_STATE_FILE", "SELECTIONS_FILE", "SCAN_STATE_FILE",
     "REVIEW_PROGRESS_FILE", "CHROME_PROFILE", "CONFIG_FILE", "BACKUP_DIR",
-    "DEFAULT_HOME", "LOCATION_FILE",
+    "DEFAULT_HOME", "LOCATION_FILE", "RATINGS_FILE",
 )
 
 
@@ -97,6 +97,7 @@ def isolated_home(prefix: str = "sweeper-selftest-"):
         util.SELECTIONS_FILE = util.Path(data) / "selections.json"
         util.SCAN_STATE_FILE = util.Path(data) / "scan_state.json"
         util.REVIEW_PROGRESS_FILE = util.Path(data) / "review_progress.json"
+        util.RATINGS_FILE = util.Path(data) / "ratings.json"
         util.CHROME_PROFILE = util.Path(tmp) / ".chrome-profile"
         util.CONFIG_FILE = util.Path(tmp) / "config.json"
         util.BACKUP_DIR = util.Path(data) / "backups"

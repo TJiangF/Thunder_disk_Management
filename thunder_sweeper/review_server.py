@@ -170,6 +170,10 @@ PAGE = r"""<!doctype html>
                     border: 1px solid #3a3f47; border-radius: 8px; padding: 4px; min-width: 160px; }
   .fitem:hover > .submenu { display: block; }
   .fitem .arrow { color: #9aa4b2; margin-left: 8px; }
+  .stars { display: inline-flex; align-items: center; gap: 1px; }
+  .stars .star { cursor: pointer; font-size: 16px; line-height: 1; color: #4a505a; }
+  .stars .star.on { color: #f5c518; }
+  .stars .star:hover { color: #f5c518; }
   .progress { flex: 1; min-width: 200px; height: 8px; background: #232833; border-radius: 6px;
               overflow: hidden; }
   .progress-fill { height: 100%; width: 0; background: #2f6fed; transition: width .3s; }
@@ -277,6 +281,16 @@ PAGE = r"""<!doctype html>
         <option value="category">分类</option>
         <option value="duration-desc">时长</option>
       </select>
+      <span class="stat" style="margin-left:12px">评分筛选：</span>
+      <select id="review-stars" onchange="setMinStars(this.value)"
+              style="background:#0f1115;color:#e6e8eb;border:1px solid #3a3f47;border-radius:6px;padding:5px 8px">
+        <option value="0">全部评分</option>
+        <option value="1">≥ 1 星</option>
+        <option value="2">≥ 2 星</option>
+        <option value="3">≥ 3 星</option>
+        <option value="4">≥ 4 星</option>
+        <option value="5">5 星</option>
+      </select>
       <span id="shots-msg" class="stat"></span>
     </div>
     <div class="cards" id="cards"></div>
@@ -329,6 +343,7 @@ PAGE = r"""<!doctype html>
 </div>
 <script>
 const VIDEOS = __VIDEOS_JSON__;
+const RATINGS = __RATINGS_JSON__;
 let LABELS = __LABELS_JSON__;
 let COLORS = __COLORS_JSON__;
 let CATEGORIES = __CATEGORIES_JSON__;
@@ -340,6 +355,7 @@ const INITIAL_SELECTED = __SELECTED_JSON__;
 
 let CATS = CATEGORIES.map(c => c.id);
 let filterCat = null;                // null = all
+let minStars = 0;                    // review rating filter: >= minStars
 const selected = new Set();          // file ids
 const selectedFolders = new Set();   // folder paths ("/a/b")
 const byId = Object.fromEntries(VIDEOS.map(v => [v.id, v]));
@@ -1185,7 +1201,9 @@ function bindTips() {
 
 /* ---------------- review cards ---------------- */
 function reviewItems() {
-  const items = VIDEOS.filter(v => visible(v) && v.thumbs && v.thumbs.length);
+  const r = minStars || 0;
+  const items = VIDEOS.filter(v => visible(v) && v.thumbs && v.thumbs.length &&
+                                   (!r || (RATINGS[v.id] || 0) >= r));
   const sel = document.getElementById('review-sort');
   const mode = sel ? sel.value : 'size-desc';
   const cmp = {
@@ -1197,6 +1215,30 @@ function reviewItems() {
   }[mode] || ((a,b) => (b.size||0) - (a.size||0));
   return items.sort(cmp);
 }
+function starsHtml(id) {
+  const r = RATINGS[id] || 0;
+  let h = '<span class="ratebox" data-id="' + esc(id) + '" onclick="event.stopPropagation()">' +
+          '<span class="stars" title="点击星级评分；再点同一颗可清除">';
+  for (let i = 1; i <= 5; i++) {
+    h += '<span class="star' + (i <= r ? ' on' : '') +
+         '" onclick="setRating(\'' + esc(id) + '\',' + i + ')">★</span>';
+  }
+  h += '</span> <span class="stat" style="font-size:11px">' + (r ? (r + ' 星') : '未评分') + '</span></span>';
+  return h;
+}
+async function setRating(id, stars) {
+  const cur = RATINGS[id] || 0;
+  const val = (cur === stars) ? 0 : stars;
+  if (val) RATINGS[id] = val; else delete RATINGS[id];
+  const box = document.querySelector('.ratebox[data-id="' + id + '"]');
+  if (box) box.outerHTML = starsHtml(id);
+  try {
+    await fetch('/rating', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, stars: val})});
+  } catch (e) {}
+  if (minStars) renderReview();
+}
+function setMinStars(v) { minStars = parseInt(v) || 0; renderReview(); }
 function renderReview() {
   const list = document.getElementById('cards');
   const items = reviewItems();
@@ -1220,7 +1262,8 @@ function renderReview() {
         '<div class="sub"><span class="badge">' + fmtSize(v.size) + '</span>' +
         '<span class="badge">' + fmtDur(v.duration) + '</span>' +
         '<span class="badge">' + res + '</span>' +
-        '<button class="mark" data-idx="' + i + '" onclick="markHere(this)">📍 标记进度</button></div></div></div>' +
+        '<button class="mark" data-idx="' + i + '" onclick="markHere(this)">📍 标记进度</button></div>' +
+        '<div class="sub">' + starsHtml(v.id) + '</div></div></div>' +
       '<div class="thumbs">' + thumbs + '</div>';
     card.addEventListener('click', ev => {
       if (ev.target.closest('img, a, button, input, select, option')) return;
@@ -1593,6 +1636,7 @@ def build_html(videos: list[dict], resume_index: int = -1,
         "thumbs": v.get("thumbs") or [],
     } for v in videos]
     html = PAGE.replace("__VIDEOS_JSON__", _embed(slim))
+    html = html.replace("__RATINGS_JSON__", _embed(util.read_json(util.RATINGS_FILE, {}) or {}))
     payload = cats_payload()
     html = html.replace("__LABELS_JSON__", _embed(payload["labels"]))
     html = html.replace("__COLORS_JSON__", _embed(payload["colors"]))
@@ -2042,6 +2086,27 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     })
                     util.log(f"已标记进度：第 {int(index) + 1} 个 — {data.get('name')}")
                 self._send(200, b'{"ok":true}', "application/json")
+                return
+
+            if path == "/rating":
+                fid = str(data.get("id") or "")
+                if not fid:
+                    self._send(400, b'{"ok":false,"error":"missing id"}', "application/json")
+                    return
+                try:
+                    stars = int(data.get("stars") or 0)
+                except (TypeError, ValueError):
+                    stars = 0
+                ratings = util.read_json(util.RATINGS_FILE, {}) or {}
+                if stars > 0:
+                    ratings[fid] = max(1, min(5, stars))
+                else:
+                    ratings.pop(fid, None)
+                util.atomic_write_json(util.RATINGS_FILE, ratings)
+                self._send(200, json.dumps({"ok": True, "id": fid,
+                                            "stars": ratings.get(fid, 0)},
+                                           ensure_ascii=False).encode("utf-8"),
+                           "application/json")
                 return
 
             if path == "/manual":
