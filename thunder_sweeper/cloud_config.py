@@ -133,19 +133,32 @@ def cloud_mtime(api) -> float | None:
     return _cloud_mtime_from_info(info) or _parse_ts(entry.get("modified_time"))
 
 
-def download(api, file_id: str) -> bytes:
+def download(api, file_id: str, attempts: int = 6, delay: float = 2.0) -> bytes:
+    """Download a cloud file, retrying while its link is not ready yet.
+
+    A just-uploaded file can take a few seconds before the drive exposes a
+    download link, so polling here avoids a spurious "没有可用下载地址".
+    """
     import requests
     from .chrome_tokens import UA
 
-    links = api.play_links(file_id)
-    url = links.get("vip") or links.get("media") or links.get("web")
-    if not url:
-        raise RuntimeError("云端文件没有可用下载地址")
-    resp = requests.get(url, headers={"User-Agent": UA,
-                                      "Referer": "https://pan.xunlei.com/"},
-                        timeout=30)
-    resp.raise_for_status()
-    return resp.content
+    last = "未知错误"
+    for attempt in range(attempts):
+        try:
+            links = api.play_links(file_id)
+            url = links.get("vip") or links.get("media") or links.get("web")
+            if url:
+                resp = requests.get(url, headers={"User-Agent": UA,
+                                                  "Referer": "https://pan.xunlei.com/"},
+                                    timeout=30)
+                resp.raise_for_status()
+                return resp.content
+            last = "云端文件没有可用下载地址"
+        except Exception as exc:
+            last = str(exc)
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    raise RuntimeError(f"下载云端配置失败：{last}")
 
 
 def upload(api, force: bool = False) -> str:
