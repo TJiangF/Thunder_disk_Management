@@ -72,6 +72,7 @@ cd /Users/tf/thunder_video_sweeper
 | `./sweeper login [--restart]` | 启动调试 Chrome 抓取 token（`--restart` 先关掉残留的调试 Chrome） |
 | `./sweeper status` | 查看登录状态 / 视频数 / 待删数 |
 | `./sweeper home [路径] [--reset]` | 查看/设置数据目录（默认 `~/Library/Application Support/ThunderSweeper`；省略路径则显示当前） |
+| `./sweeper sync [--cloud\|--local]` | 拉取云端 `/config/sweeper_config.json`，显示云端/本地更新时间戳并选择用哪个；`--cloud`/`--local` 跳过询问 |
 | `./sweeper scan [--resume] [--fresh] [--limit N] [--min-size MB]` | 递归扫描网盘，视频按大小降序写 `data/videos.json`（`--resume` 续扫；上次已完成会自动完整重扫；`--fresh` 强制完整重扫） |
 | `./sweeper classify` | 按命名规则分类，写 `data/classified.json` |
 | `./sweeper dedupe` | 扫描重复文件（同大小+名称相似/同番号），写 `data/duplicates.json` |
@@ -317,6 +318,7 @@ cd /Users/tf/thunder_video_sweeper
     selections.json       review 提交的待删清单
     review_progress.json  review 的进度标记
     ratings.json          视频五星评分（id→星级）
+    sweeper_config.json   配置包（手动分类+评分+分类树+关键词；云端同步用）
     applied.json          apply 的执行结果
 ```
 
@@ -371,6 +373,13 @@ cd /Users/tf/thunder_video_sweeper
   设置写入 `<默认目录>/location.txt`，**两种运行方式共用同一份数据**。
 - **优先级最高**：环境变量 `THUNDER_SWEEPER_HOME=/path/to/dir`（临时覆盖，不改设置）。
 - 想在别处放浏览器配置/缓存，也支持 `THUNDER_SWEEPER_CHROME` 指定浏览器可执行文件。
+
+### 云端配置同步（手动分类 / 评分 / 分类设置）
+
+- 本地把「**手动分类 + 评分 + 分类树 + 关键词规则**」打包成一个配置文件 `data/sweeper_config.json`。
+- **每次启动**（向导菜单）会**自动拉取**云盘根目录 `config/sweeper_config.json`；若存在，则显示**云端/本地两个更新时间戳**，让你选择用哪边作为本地配置（选云端=覆盖本地并立即生效）。
+- 也可以手动同步：`./sweeper sync`（询问）或 `./sweeper sync --cloud` / `--local`（不询问）；向导菜单里也有 `[s] 同步云端配置`。
+- 该文件需要你自己放到云盘的 `/config/` 下（本工具只读取、**不上传**）。
 
 ### 每台机器的前置条件
 

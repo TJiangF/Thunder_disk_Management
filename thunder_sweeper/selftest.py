@@ -20,7 +20,7 @@ import traceback
 import urllib.request
 from contextlib import contextmanager
 
-from . import categories, classify, dedupe, organize, screenshots, thunder_api, util
+from . import categories, classify, cloud_config, dedupe, organize, screenshots, thunder_api, util
 
 
 class Results:
@@ -165,6 +165,14 @@ def test_util(r: Results) -> None:
         cfg = util.load_config()
         r.eq("用户配置覆盖默认", cfg["organize_base"], "/我的整理")
         r.eq("未指定项沿用默认", cfg["debug_port"], util.DEFAULT_CONFIG["debug_port"])
+
+        util.atomic_write_json(util.MANUAL_CATS_FILE, {"x": "jp"})
+        util.atomic_write_json(util.RATINGS_FILE, {"x": 5})
+        bundle = cloud_config.make_bundle()
+        r.eq("配置包含手动分类", bundle.get("manual_categories"), {"x": "jp"})
+        r.eq("配置包含评分", bundle.get("ratings"), {"x": 5})
+        cloud_config.apply_bundle({"ratings": {"y": 3}})
+        r.eq("配置包可应用", util.read_json(util.RATINGS_FILE), {"y": 3})
 
         os.environ["THUNDER_SWEEPER_HOME"] = "/tmp/ts-home-test"
         try:

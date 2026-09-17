@@ -29,6 +29,7 @@ _MENU = """
   [7] 执行整理              （移动 + 清理，会自动重扫）
   [8] 删除已勾选文件        （移入回收站）
   [9] 查看状态
+  [s] 同步云端配置
   [d] 打开数据目录
   [h] 设置数据目录
   [q] 退出
@@ -141,6 +142,25 @@ def _require_login() -> bool:
     return False
 
 
+def _do_sync(cfg) -> None:
+    """Pull the cloud /config bundle, compare with local, let the user choose."""
+    from . import cloud_config, thunder_api
+
+    if not _require_login():
+        return
+    api = thunder_api.ThunderAPI(chrome_tokens.load_provider(cfg), cfg)
+    cloud_config.sync(api, cfg)
+
+
+def _startup_sync(cfg) -> None:
+    if not _is_logged_in():
+        return
+    try:
+        _do_sync(cfg)
+    except Exception as exc:
+        util.log(f"云端配置同步跳过：{exc}", "WARN")
+
+
 def _menu_once(cfg) -> bool:
     choice = input("\n请选择操作: ").strip().lower()
     from . import __main__ as cli
@@ -176,6 +196,8 @@ def _menu_once(cfg) -> bool:
             cli.cmd_apply(_ns(yes=False, dry_run=False), util.load_config())
     elif choice == "9":
         cli.cmd_status(_ns(), util.load_config())
+    elif choice == "s":
+        _do_sync(cfg)
     elif choice == "d":
         _open_dir(util.ROOT)
     elif choice == "h":
@@ -188,6 +210,7 @@ def _menu_once(cfg) -> bool:
 def run(cfg: dict | None = None) -> int:
     cfg = cfg or util.load_config()
     util.ensure_dirs()
+    _startup_sync(cfg)
     while True:
         login = "已登录 ✓" if _is_logged_in() else "未登录（请先选 1）"
         print(_MENU.format(ver=util.app_version(), data=util.data_dir_display(), login=login))
