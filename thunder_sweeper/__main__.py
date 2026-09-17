@@ -226,12 +226,15 @@ def cmd_sync(args, cfg):
 
     provider = chrome_tokens.load_provider(cfg)
     api = thunder_api.ThunderAPI(provider, cfg)
+    if getattr(args, "upload", False):
+        cloud_config.upload(api, force=getattr(args, "yes", False))
+        return
     choice = None
     if getattr(args, "cloud", False):
         choice = "cloud"
     elif getattr(args, "local", False):
         choice = "local"
-    cloud_config.sync(api, cfg, choice=choice)
+    cloud_config.sync(api, choice=choice)
 
 
 def cmd_review(args, cfg):
@@ -673,9 +676,11 @@ def main(argv=None):
     p_home.add_argument("path", nargs="?", help="新的数据目录；省略则显示当前目录")
     p_home.add_argument("--reset", action="store_true", help="恢复默认数据目录")
 
-    p_sync = sub.add_parser("sync", help="拉取云端 /config/sweeper_config.json 并与本地比对")
-    p_sync.add_argument("--cloud", action="store_true", help="直接用云端覆盖本地（不询问）")
-    p_sync.add_argument("--local", action="store_true", help="保留本地配置（不询问）")
+    p_sync = sub.add_parser("sync", help="同步配置：上传本地到云端 / 拉取云端覆盖本地")
+    p_sync.add_argument("--upload", action="store_true", help="上传：用本地覆盖云端存档")
+    p_sync.add_argument("--cloud", action="store_true", help="同步：用云端覆盖本地（不询问）")
+    p_sync.add_argument("--local", action="store_true", help="同步：保留本地（不询问）")
+    p_sync.add_argument("--yes", action="store_true", help="上传时不询问确认")
 
     p_inspect = sub.add_parser("inspect", help="打印某视频的 file_info（排查直链用）")
     p_inspect.add_argument("target", help="videos.json 中的序号（从 1 开始，按大小降序）或文件 id")

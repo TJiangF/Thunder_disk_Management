@@ -1,14 +1,16 @@
-"""Pull a user settings *bundle* from the cloud ``/config`` folder at startup.
+"""Local settings *bundle* + cloud ``/config`` sync (pull and push).
 
-A bundle is one JSON file that holds all user-authored settings:
+A bundle is one JSON file holding all user-authored settings:
 
 * ``manual_categories`` — manual category overrides
 * ``ratings``           — 5-star ratings
 * ``categories``        — the category tree
 * ``classify_rules``    — keyword / override rules
 
-On each launch we pull the cloud copy, compare its update time with the local
-bundle and let the user pick which one to load.  Nothing is ever uploaded here.
+* ``upload`` writes the local bundle to ``/config/sweeper_config.json`` (creating
+  the ``config`` folder if needed, replacing any old copy).
+* ``sync``  pulls the cloud copy and, after showing both timestamps, lets the
+  user overwrite the local bundle with it.
 """
 
 from __future__ import annotations
@@ -47,26 +49,25 @@ def make_bundle() -> dict:
 
 
 def save_local_bundle() -> Path:
+    data = json.dumps(make_bundle(), ensure_ascii=False, indent=2).encode("utf-8")
     path = local_path()
-    util.atomic_write_json(path, make_bundle())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
     return path
 
 
 def apply_bundle(bundle: dict) -> list[str]:
-    """Write the bundle's parts back to the working data files."""
     written = []
     for key, attr in _PARTS:
-        if key not in bundle:
-            continue
-        util.atomic_write_json(getattr(util, attr), bundle[key])
-        written.append(key)
+        if key in bundle:
+            util.atomic_write_json(getattr(util, attr), bundle[key])
+            written.append(key)
     return written
 
 
 def local_mtime() -> float | None:
-    path = local_path()
     try:
-        return path.stat().st_mtime
+        return local_path().stat().st_mtime
     except OSError:
         return None
 
@@ -87,7 +88,7 @@ def _parse_ts(value) -> float | None:
         return None
 
 
-def _cloud_mtime(info: dict) -> float | None:
+def _cloud_mtime_from_info(info: dict) -> float | None:
     for key in ("modified_time", "user_modified_time", "created_time",
                 "original_create_time"):
         ts = _parse_ts(info.get(key))
@@ -96,27 +97,45 @@ def _cloud_mtime(info: dict) -> float | None:
     return None
 
 
-def find_cloud_file(api) -> dict | None:
-    """The ``/config/sweeper_config.json`` entry, if it exists."""
+def _fmt_ts(mtime: float | None) -> str:
+    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S") if mtime else "暂无"
+
+
+def find_cloud_dir(api) -> dict | None:
     try:
         root = api.list_folder("")
     except Exception:
         return None
-    folder = next((e for e in root
-                   if e.get("kind") == "drive#folder" and e.get("name") == CLOUD_DIR), None)
+    return next((e for e in root if e.get("kind") == "drive#folder"
+                 and e.get("name") == CLOUD_DIR), None)
+
+
+def find_cloud_file(api) -> dict | None:
+    folder = find_cloud_dir(api)
     if not folder:
         return None
     try:
         entries = api.list_folder(folder["id"])
     except Exception:
         return None
-    return next((e for e in entries
-                 if e.get("kind") == "drive#file" and e.get("name") == CLOUD_FILE), None)
+    return next((e for e in entries if e.get("kind") == "drive#file"
+                 and e.get("name") == CLOUD_FILE), None)
+
+
+def cloud_mtime(api) -> float | None:
+    entry = find_cloud_file(api)
+    if not entry:
+        return None
+    try:
+        info = api.file_info(entry["id"]) or {}
+    except Exception:
+        info = {}
+    return _cloud_mtime_from_info(info) or _parse_ts(entry.get("modified_time"))
 
 
 def download(api, file_id: str) -> bytes:
-    from .chrome_tokens import UA
     import requests
+    from .chrome_tokens import UA
 
     links = api.play_links(file_id)
     url = links.get("vip") or links.get("media") or links.get("web")
@@ -129,68 +148,84 @@ def download(api, file_id: str) -> bytes:
     return resp.content
 
 
-def pull(api) -> dict | None:
-    """Fetch the cloud bundle; returns {bytes, mtime, info} or None."""
+def upload(api, force: bool = False) -> str:
+    """Push the local bundle to the cloud, replacing any existing copy."""
+    local_ts = local_mtime()
+    entry = find_cloud_file(api)
+    cloud_ts = None
+    if entry:
+        try:
+            info = api.file_info(entry["id"]) or {}
+        except Exception:
+            info = {}
+        cloud_ts = _cloud_mtime_from_info(info) or _parse_ts(entry.get("modified_time"))
+
+    util.log(f"本地版本: {_fmt_ts(local_ts)}")
+    util.log(f"云端版本: {_fmt_ts(cloud_ts)}")
+    if not force:
+        ans = input("  确认用本地覆盖云端存档？(yes/no): ").strip().lower()
+        if ans != "yes":
+            util.log("已取消上传", "WARN")
+            return "cancel"
+
+    data = json.dumps(make_bundle(), ensure_ascii=False, indent=2).encode("utf-8")
+    folder = find_cloud_dir(api)
+    if folder is None:
+        cid = api.create_folder(CLOUD_DIR)
+        util.log(f"云端没有 /{CLOUD_DIR}，已新建")
+    else:
+        cid = folder["id"]
+    if entry:
+        try:
+            api.trash(entry["id"])
+            time.sleep(0.5)
+        except Exception as exc:
+            util.log(f"覆盖前删除旧存档失败（继续上传）：{exc}", "WARN")
+    api.upload_file(CLOUD_FILE, cid, data)
+    local_path().write_bytes(data)
+    for _ in range(6):        # wait until the drive listing reflects the upload
+        if find_cloud_file(api):
+            break
+        time.sleep(1)
+    util.log(f"已上传: /{CLOUD_DIR}/{CLOUD_FILE}（{len(data)} 字节）")
+    return "uploaded"
+
+
+def sync(api, choice: str | None = None, interactive: bool = True) -> str:
+    """Pull the cloud bundle and let the user overwrite the local one with it."""
     entry = find_cloud_file(api)
     if not entry:
-        return None
-    info = {}
+        util.log(f"云端版本: 暂无（/{CLOUD_DIR}/{CLOUD_FILE} 不存在）")
+        return "none"
     try:
         info = api.file_info(entry["id"]) or {}
     except Exception:
-        pass
-    data = download(api, entry["id"])
-    mtime = _cloud_mtime(info) or _parse_ts(entry.get("modified_time"))
-    return {"bytes": data, "mtime": mtime, "info": info, "entry": entry}
+        info = {}
+    cloud_ts = _cloud_mtime_from_info(info) or _parse_ts(entry.get("modified_time"))
 
-
-def _fmt_ts(mtime: float | None) -> str:
-    if not mtime:
-        return "（无）"
-    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def sync(api, cfg: dict, choice: str | None = None, interactive: bool = True) -> str:
-    """Compare cloud vs local bundle and load the chosen one.
-
-    ``choice`` may be ``"cloud"`` / ``"local"`` to skip the prompt.
-    Returns ``"cloud"`` | ``"local"`` | ``"none"``.
-    """
-    remote = pull(api)
-    if remote is None:
-        util.log(f"云端没有 /{CLOUD_DIR}/{CLOUD_FILE}，跳过同步")
-        return "none"
-
-    try:
-        bundle = json.loads(remote["bytes"].decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
-        util.log(f"云端配置无法解析（{exc}），跳过", "WARN")
-        return "none"
-
-    cloud_ts = remote["mtime"]
-    local_ts = local_mtime()
-    util.log(f"云端配置更新时间: {_fmt_ts(cloud_ts)}")
-    util.log(f"本地配置更新时间: {_fmt_ts(local_ts)}")
+    util.log(f"云端版本: {_fmt_ts(cloud_ts)}")
+    util.log(f"本地版本: {_fmt_ts(local_mtime())}")
 
     if choice not in ("cloud", "local"):
         if not interactive or not sys.stdin.isatty():
-            choice = "cloud" if (local_ts is None or (cloud_ts and cloud_ts > local_ts)) else "local"
+            choice = "local"
         else:
-            default = "1" if (local_ts is None or (cloud_ts and cloud_ts > local_ts)) else "2"
-            print("  [1] 用云端覆盖本地   [2] 保留本地   [3] 跳过本次")
-            raw = input(f"  请选择（回车={default}）: ").strip() or default
-            choice = {"1": "cloud", "2": "local", "3": "none"}.get(raw, "local")
+            ans = input("  用云端覆盖本地存档？(yes/no): ").strip().lower()
+            choice = "cloud" if ans == "yes" else "local"
 
     if choice == "cloud":
+        try:
+            raw = download(api, entry["id"])
+            bundle = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            util.log(f"云端配置无法解析（{exc}），已取消", "WARN")
+            return "none"
         local_path().parent.mkdir(parents=True, exist_ok=True)
-        local_path().write_bytes(remote["bytes"])
+        local_path().write_bytes(raw)
         written = apply_bundle(bundle)
-        util.log(f"已用云端配置覆盖本地（{', '.join(written) or '无字段'}）")
+        util.log(f"已用云端覆盖本地（{', '.join(written) or '无字段'}）")
         return "cloud"
-    if choice == "local":
-        if not local_path().exists():
-            save_local_bundle()
-        util.log("保留本地配置")
-        return "local"
-    util.log("已跳过同步")
-    return "none"
+    util.log("保留本地配置")
+    if not local_path().exists():
+        save_local_bundle()
+    return "local"

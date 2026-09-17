@@ -72,7 +72,7 @@ cd /Users/tf/thunder_video_sweeper
 | `./sweeper login [--restart]` | 启动调试 Chrome 抓取 token（`--restart` 先关掉残留的调试 Chrome） |
 | `./sweeper status` | 查看登录状态 / 视频数 / 待删数 |
 | `./sweeper home [路径] [--reset]` | 查看/设置数据目录（默认 `~/Library/Application Support/ThunderSweeper`；省略路径则显示当前） |
-| `./sweeper sync [--cloud\|--local]` | 拉取云端 `/config/sweeper_config.json`，显示云端/本地更新时间戳并选择用哪个；`--cloud`/`--local` 跳过询问 |
+| `./sweeper sync [--upload] [--cloud\|--local] [--yes]` | 同步配置：`--upload` 上传本地覆盖云端；默认/`--cloud` 拉取云端覆盖本地；`--local` 保留本地 |
 | `./sweeper scan [--resume] [--fresh] [--limit N] [--min-size MB]` | 递归扫描网盘，视频按大小降序写 `data/videos.json`（`--resume` 续扫；上次已完成会自动完整重扫；`--fresh` 强制完整重扫） |
 | `./sweeper classify` | 按命名规则分类，写 `data/classified.json` |
 | `./sweeper dedupe` | 扫描重复文件（同大小+名称相似/同番号），写 `data/duplicates.json` |
@@ -377,9 +377,11 @@ cd /Users/tf/thunder_video_sweeper
 ### 云端配置同步（手动分类 / 评分 / 分类设置）
 
 - 本地把「**手动分类 + 评分 + 分类树 + 关键词规则**」打包成一个配置文件 `data/sweeper_config.json`。
-- **每次启动**（向导菜单）会**自动拉取**云盘根目录 `config/sweeper_config.json`；若存在，则显示**云端/本地两个更新时间戳**，让你选择用哪边作为本地配置（选云端=覆盖本地并立即生效）。
-- 也可以手动同步：`./sweeper sync`（询问）或 `./sweeper sync --cloud` / `--local`（不询问）；向导菜单里也有 `[s] 同步云端配置`。
-- 该文件需要你自己放到云盘的 `/config/` 下（本工具只读取、**不上传**）。
+- 向导菜单 **`[s] 同步配置 (Sync Config)`** 打开子菜单（三个功能键）：
+  - **[1] Upload**：把本地配置**上传/更新到云盘** `/config/sweeper_config.json`。上传前先显示**云端/本地时间戳**（云端没有则显示“暂无”）并让你确认；确认后覆盖云端存档；云端没有 `config` 文件夹会**自动新建**。
+  - **[2] Sync**：拉取云端 `/config/sweeper_config.json`，显示**云端/本地时间戳**，确认后用**云端覆盖本地**（立即生效）。
+  - **[3] Exit**：返回上一级菜单。
+- 命令行等价：`./sweeper sync --upload [--yes]`（上传）、`./sweeper sync [--cloud|--local]`（拉取）。
 
 ### 每台机器的前置条件
 

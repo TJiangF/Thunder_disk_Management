@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import time
-from urllib.parse import urlsplit
+from datetime import datetime, timezone
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -12,6 +15,23 @@ from . import util
 from .chrome_tokens import TokenProvider
 
 API_BASE = "https://api-pan.xunlei.com"
+
+
+def gcid(data: bytes) -> str:
+    """迅雷 GCID (blocked-SHA1 hash) required for uploads."""
+    size = len(data)
+    block = 0x40000
+    while block and (size / block) > 0x200 and block < 0x200000:
+        block <<= 1
+    outer = hashlib.sha1()
+    if size == 0:
+        outer.update(hashlib.sha1(b"").digest())
+    pos = 0
+    while pos < size:
+        chunk = data[pos:pos + block]
+        pos += len(chunk)
+        outer.update(hashlib.sha1(chunk).digest())
+    return outer.hexdigest()
 
 VIDEO_EXTENSIONS = {
     "mp4", "mkv", "avi", "mov", "wmv", "flv", "ts", "m2ts", "webm", "rmvb",
@@ -147,6 +167,79 @@ class ThunderAPI:
             return resp.json()
         except ValueError:
             return {}
+
+    # ------------------------------------------------------------------ #
+    def upload_file(self, name: str, parent_id: str, data: bytes) -> str:
+        """Create/replace ``name`` under ``parent_id`` and upload ``data``.
+
+        Uses the resumable flow: ask the API for a resumable slot, then PUT the
+        bytes to the returned S3 endpoint with an AWS SigV4 signature.
+        """
+        body = {
+            "kind": "drive#file",
+            "parent_id": parent_id,
+            "name": name,
+            "size": len(data),
+            "hash": gcid(data),
+            "upload_type": "UPLOAD_TYPE_RESUMABLE",
+        }
+        resp = self._request("POST", f"{API_BASE}/drive/v1/files", data=json.dumps(body))
+        payload = resp.json()
+        params = (payload.get("resumable") or {}).get("params") or {}
+        if not params:
+            raise RuntimeError(f"云端未返回上传参数: {str(payload)[:200]}")
+        self._s3_put(params, data)
+        return (payload.get("file") or {}).get("id")
+
+    @staticmethod
+    def _s3_put(params: dict, data: bytes) -> None:
+        endpoint = str(params["endpoint"]).rstrip("/")
+        bucket = params["bucket"]
+        key = params["key"]
+        region = params.get("region") or "xunlei"
+        host = f"{bucket}.{endpoint}"
+        url = f"https://{host}/{quote(key, safe='/-_.~')}"
+        payload_hash = hashlib.sha256(data).hexdigest()
+        now = datetime.now(timezone.utc)
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        date = now.strftime("%Y%m%d")
+        signed_headers = "host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+        canonical_headers = (
+            f"host:{host}\n"
+            f"x-amz-content-sha256:{payload_hash}\n"
+            f"x-amz-date:{amz_date}\n"
+            f"x-amz-security-token:{params['security_token']}\n"
+        )
+        canonical_request = "\n".join([
+            "PUT", "/" + quote(key, safe="/-_.~"), "",
+            canonical_headers, signed_headers, payload_hash,
+        ])
+        scope = f"{date}/{region}/s3/aws4_request"
+        string_to_sign = "\n".join([
+            "AWS4-HMAC-SHA256", amz_date, scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ])
+
+        def _sign(secret: bytes, msg: str) -> bytes:
+            return hmac.new(secret, msg.encode(), hashlib.sha256).digest()
+
+        k_date = _sign(("AWS4" + params["access_key_secret"]).encode(), date)
+        k_region = _sign(k_date, region)
+        k_service = _sign(k_region, "s3")
+        k_signing = _sign(k_service, "aws4_request")
+        signature = hmac.new(k_signing, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        authorization = (
+            f"AWS4-HMAC-SHA256 Credential={params['access_key_id']}/{scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        resp = requests.put(url, data=data, headers={
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date": amz_date,
+            "x-amz-security-token": params["security_token"],
+            "Authorization": authorization,
+        }, timeout=120)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"S3 上传失败 HTTP {resp.status_code}: {resp.text[:200]}")
 
     # ------------------------------------------------------------------ #
     def play_links(self, file_id: str) -> dict:
