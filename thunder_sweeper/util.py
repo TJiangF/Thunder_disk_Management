@@ -18,6 +18,22 @@ APP_VERSION = "1.0.0"
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 
 
+def open_path(path) -> None:
+    """Open a file/folder with the OS default handler (player/explorer)."""
+    import subprocess
+
+    p = str(path)
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", p], check=False)
+        elif sys.platform.startswith("win"):
+            os.startfile(p)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["xdg-open", p], check=False)
+    except Exception as exc:
+        log(f"打开失败: {p} — {exc}", "WARN")
+
+
 def ensure_utf8_stdio() -> None:
     """Force UTF-8 on stdout/stderr.
 

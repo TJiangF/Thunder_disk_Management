@@ -7,9 +7,6 @@ wizard, which wraps the individual commands behind a numbered menu.
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
-import sys
 
 from . import chrome_tokens, util
 
@@ -83,12 +80,7 @@ def _prompt_int(question: str, default: int) -> int:
 
 def _open_dir(path) -> None:
     try:
-        if sys.platform == "darwin":
-            subprocess.run(["open", str(path)], check=False)
-        elif sys.platform.startswith("win"):
-            os.startfile(str(path))  # type: ignore[attr-defined]
-        else:
-            subprocess.run(["xdg-open", str(path)], check=False)
+        util.open_path(path)
         util.log(f"已打开: {path}")
     except Exception as exc:
         util.log(f"打开目录失败: {exc}", "WARN")

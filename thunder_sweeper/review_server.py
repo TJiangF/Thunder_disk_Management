@@ -1537,10 +1537,15 @@ function pollApply() {
 /* ---------------- play (in-page) + download ---------------- */
 function playHere(ev, el) {
   ev.preventDefault(); ev.stopPropagation();
-  const v = document.getElementById('player-video');
-  v.src = '/play/' + encodeURIComponent(el.dataset.id);
+  const v = byId[el.dataset.id];
+  if (v && v.local_path) {
+    fetch('/open/' + encodeURIComponent(el.dataset.id)).catch(() => {});
+    return false;
+  }
+  const pv = document.getElementById('player-video');
+  pv.src = '/play/' + encodeURIComponent(el.dataset.id);
   document.getElementById('modal').style.display = 'flex';
-  v.play().catch(() => {});
+  pv.play().catch(() => {});
   return false;
 }
 function closePlayer() {
@@ -1844,6 +1849,9 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     parsed.path[len("/stream/"):],
                     download=qs.get("download", ["0"])[0] in ("1", "true", "yes"))
                 return
+            if parsed.path.startswith("/open/"):
+                self._open_local(parsed.path[len("/open/"):])
+                return
             if parsed.path == "/shots/status":
                 with shots_lock:
                     payload = {"ok": True, **shots_state}
@@ -2025,6 +2033,25 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                         remaining -= len(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+        def _open_local(self, vid: str):
+            """Open a local video with the OS default player (local mode only).
+
+            The browser can't launch a system app directly, so the page calls
+            this endpoint and the *server* runs the default handler on the file.
+            """
+            video = by_id.get(vid)
+            if not video or not video.get("local_path"):
+                self._send(404, b"not a local file", "text/plain")
+                return
+            path = Path(video["local_path"])
+            if not path.is_file():
+                self._send(404, json.dumps({"ok": False, "error": "file missing"}).encode("utf-8"),
+                           "application/json")
+                return
+            threading.Thread(target=util.open_path, args=(str(path),), daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "name": video.get("name")},
+                                       ensure_ascii=False).encode("utf-8"), "application/json")
 
         def _serve_thumb(self, rest: str):
             parts = rest.split("/")

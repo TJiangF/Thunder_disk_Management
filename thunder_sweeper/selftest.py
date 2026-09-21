@@ -1116,6 +1116,22 @@ def test_local_disk(r: Results) -> None:
                         f"st={st3} loc={loc}")
             except Exception as exc:
                 r.check("/play 本地跳转到 /stream", False, str(exc))
+
+            saved_open, opened = util.open_path, []
+            util.open_path = lambda p: opened.append(p)
+            try:
+                _http("GET", base + "/open/" + target["id"])
+                r.check("/open 调用系统默认播放器", len(opened) == 1
+                        and os.path.normcase(opened[0]) == os.path.normcase(target["local_path"]),
+                        f"opened={opened}")
+                try:
+                    _http("GET", base + "/open/cloud-only-id")
+                    st404 = 200
+                except urllib.error.HTTPError as exc:
+                    st404 = exc.code
+                r.eq("/open 非本地文件 404", st404, 404)
+            finally:
+                util.open_path = saved_open
         finally:
             _http("POST", base + "/shutdown", {})
 
