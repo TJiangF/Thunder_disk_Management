@@ -14,12 +14,15 @@ import colorsys
 import errno
 import hashlib
 import json
+import mimetypes
+import os
 import socketserver
 import sys
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from . import categories, classify, dedupe, organize, screenshots, util
@@ -1835,6 +1838,12 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
             if parsed.path.startswith("/download/"):
                 self._serve_download(parsed.path[len("/download/"):])
                 return
+            if parsed.path.startswith("/stream/"):
+                qs = parse_qs(parsed.query or "")
+                self._serve_local_stream(
+                    parsed.path[len("/stream/"):],
+                    download=qs.get("download", ["0"])[0] in ("1", "true", "yes"))
+                return
             if parsed.path == "/shots/status":
                 with shots_lock:
                     payload = {"ok": True, **shots_state}
@@ -1918,6 +1927,9 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
             if not video:
                 self._send(404, b"no video", "text/plain")
                 return
+            if video.get("local_path"):
+                self._serve_local_stream(vid, download=True)
+                return
             try:
                 url = picker(vid)
             except Exception as exc:
@@ -1949,6 +1961,70 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                 pass
             finally:
                 upstream.close()
+
+        def _serve_local_stream(self, vid: str, download: bool = False):
+            """Serve a local video file from disk with HTTP Range support.
+
+            Used in local-disk mode only (records carry a ``local_path``).  The
+            ``<video>`` element needs Range to seek, downloads want a
+            Content-Disposition header.  Anything else returns 404.
+            """
+            video = by_id.get(vid)
+            if not video:
+                self._send(404, b"no video", "text/plain")
+                return
+            local = video.get("local_path")
+            if not local:
+                self._send(404, b"not a local file", "text/plain")
+                return
+            path = Path(local)
+            if not path.is_file():
+                self._send(404, b"missing file", "text/plain")
+                return
+            size = path.stat().st_size
+            mime = mimetypes.guess_type(video.get("name") or "")[0] or "video/mp4"
+            start, end = 0, size - 1
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                try:
+                    s, _, e_ = rng[6:].partition("-")
+                    if s:
+                        start = max(0, int(s))
+                    if e_:
+                        end = min(size - 1, int(e_))
+                except ValueError:
+                    start, end = 0, size - 1
+                if start > end or start < 0 or end >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+            length = end - start + 1
+            if download:
+                name = video.get("name") or path.name
+                self.send_response(200)
+                self.send_header("Content-Disposition",
+                                 "attachment; filename*=UTF-8''" + quote(name))
+            else:
+                self.send_response(206 if rng and rng.startswith("bytes=") else 200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(length))
+            if rng and rng.startswith("bytes="):
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            try:
+                with path.open("rb") as fh:
+                    fh.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = fh.read(min(1 << 20, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def _serve_thumb(self, rest: str):
             parts = rest.split("/")

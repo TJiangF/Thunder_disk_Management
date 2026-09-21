@@ -78,10 +78,15 @@ def _default_home() -> Path:
     return DEFAULT_HOME
 
 
-def _apply_root(root: Path) -> None:
+MODE = "cloud"  # "cloud" | "local"
+LOCAL_PATH_FILE = DEFAULT_HOME / "local_path.txt"
+DATA_SUBDIR = "data"
+
+
+def _apply_root(root: Path, sub: str = "data") -> None:
     """(Re)point every data path at ``root`` for the current process."""
     g = globals()
-    data = root / "data"
+    data = root / sub
     g["ROOT"] = root
     g["DATA_DIR"] = data
     g["THUMB_DIR"] = data / "thumbs"
@@ -106,6 +111,44 @@ def _apply_root(root: Path) -> None:
 _apply_root(_default_home())
 
 
+def set_mode(mode: str) -> None:
+    """Switch between ``cloud`` and ``local`` management.
+
+    Each mode gets its own data set (``data/`` vs ``data_local/``) so the local
+    disk records never collide with -- or get sync'd alongside -- the cloud
+    ones.  ``review``/``shots``/``classify`` etc. read the current mode's files
+    through the ``util`` globals, so this only needs to be called once before
+    the relevant command runs.
+    """
+    global MODE, DATA_SUBDIR
+    mode = "local" if mode == "local" else "cloud"
+    MODE = mode
+    DATA_SUBDIR = "data_local" if mode == "local" else "data"
+    _apply_root(ROOT, DATA_SUBDIR)
+    ensure_dirs()
+
+
+def is_local() -> bool:
+    return MODE == "local"
+
+
+def save_local_path(path) -> Path:
+    root = Path(path).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    LOCATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_PATH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_PATH_FILE.write_text(str(root), encoding="utf-8")
+    return root
+
+
+def local_path() -> Path | None:
+    try:
+        text = LOCAL_PATH_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text).expanduser().resolve() if text else None
+
+
 def set_home(path=None) -> Path:
     """Change the data root, persist it and apply it to the current process.
 
@@ -124,7 +167,7 @@ def set_home(path=None) -> Path:
             LOCATION_FILE.unlink()
         except OSError:
             pass
-    _apply_root(root)
+    _apply_root(root, DATA_SUBDIR)
     ensure_dirs()
     return root
 

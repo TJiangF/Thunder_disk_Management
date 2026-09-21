@@ -19,6 +19,7 @@ hiddenimports = [
     "imageio_ffmpeg",
     "thunder_sweeper.wizard",
     "thunder_sweeper.selftest",
+    "thunder_sweeper.local_disk",
 ]
 
 a = Analysis(

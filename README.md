@@ -86,6 +86,9 @@ powershell -ExecutionPolicy Bypass -File build_win.ps1
 **已知小差异**：终端固定面板/进度条使用 ANSI 控制码与 `█░` 字符，
 在 Windows Terminal / 新版 PowerShell 下正常；旧版 cmd 下可能显示乱码（功能性不受影响）。
 
+**Windows 上也支持本地磁盘管理**（见 3.8）：`sweeper.bat local drives` →
+`sweeper.bat local path E:\` → `sweeper.bat local scan`（全程只读）等，与云盘数据完全分离。
+
 ---
 
 ## 1. 安装依赖
@@ -280,6 +283,40 @@ cd /Users/tf/thunder_video_sweeper
 - **刷新即最新**：页面每次刷新都会从磁盘重新加载 `videos.json/classified.json` 与手动分类，所以重扫/分类/整理后**普通刷新**就能看到真实路径与分类（无需重启服务）。
 - 想重做整盘整理前，建议先重新扫描以刷新 `data/files.json`：`rm -f data/scan_state.json && ./sweeper scan && ./sweeper classify`。
 
+### 3.8 本地磁盘管理模式（Windows / macOS / Linux）
+
+同一套框架也支持**管理本地硬盘**（云盘与本地互不影响）：
+- 入口：**向导菜单**启动时先选「本地磁盘管理」；或命令行 `local` 子命令
+  （`./sweeper local scan` / `sweeper.bat local scan` 均可）。
+- 数据完全分离：本地记录写 `data_local/`（与云盘 `data/` 分开），
+  **本地文件/分类/选择不会进云盘 sync**。
+- 扫描**是只读遍历**，绝不改动磁盘上的任何文件。
+
+**流程**
+
+```bash
+./sweeper local drives                 # 列出可用磁盘/路径
+./sweeper local path E:\               # 选择要管理的路径（Windows 如 E:\，mac 如 /Volumes/XXX）
+./sweeper local scan                   # 全盘只读扫描（可断点续扫）
+./sweeper local classify               # 按命名规则分类（与云盘同一套规则）
+./sweeper local dedupe                 # 找重复视频
+./sweeper local shots --top 20         # 给最大的 20 个视频截图（ffmpeg 直接读盘）
+./sweeper local review                 # 打开管家页面（框图/审核/分类/去重，页面内云播即本地流）
+./sweeper local apply                  # 把勾选文件移入回收站目录
+./sweeper local organize [--apply]     # 本地整理方案 / 执行（移动到 <路径>/整理/<分类>/）
+```
+
+**区别 / 说明**
+- 「播放 / 下载」= 本地服务**直接流式喂给浏览器**（支持 HTTP Range seek，与云播体验一致）。
+- 删除 = 移入磁盘根下的 `.ThunderSweeper_Trash/` **隐藏回收夹**（可手动恢复，不会永久删除）。
+- `organize` 预览**不会移动任何文件**；`--apply` 才会把视频移到 `<路径>/整理/<分类路径>/`，
+  并把空/只剩垃圾的源文件夹移入回收夹。
+- 网页「整理」页的"作用路径"下拉、分类设置、手动分类、评分、进度标记等全部沿用云盘实现。
+- 云盘（`login/sync`/整理到网盘 `/整理`）完全不受影响：两套数据、两套路径互不干扰。
+
+**注意**：在真实重要磁盘上执行 `organize --apply` / `apply` /
+`organize --clean-junk` **之前**，建议先只跑预览并人工核对清单。
+
 ### 3.7 删除（移入回收站）
 两种方式，二选一：
 
@@ -370,6 +407,7 @@ cd /Users/tf/thunder_video_sweeper
 ```
 
 > `location.txt` 也在数据根目录，记录你自定义的数据目录（没有则用默认）。
+> **本地磁盘模式**的扫描/分类/截图全部写在 `<数据目录>/data_local/`（云盘是 `data/`），互不干扰。
 
 
 ---

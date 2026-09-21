@@ -173,14 +173,16 @@ def disk_thumbs(video_id, needed: int) -> list[str]:
 
 
 def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = None,
-                 progress=None, on_done=None, live=None, stop=None) -> list[dict]:
+                 progress=None, on_done=None, live=None, stop=None,
+                 api_factory=None) -> list[dict]:
     """Screenshot many videos concurrently.
 
-    Each worker thread gets its own ThunderAPI (own requests.Session); token
-    refresh is serialized inside the shared TokenProvider.  When ``live`` (a
-    :class:`util.LiveDisplay`) is given, the videos in progress are painted into
-    its dedicated lines; otherwise a 15s heartbeat logs them so a slow frame does
-    not look like a hang.
+    Each worker thread gets its own API client.  In cloud mode that's a
+    ``ThunderAPI`` built from ``provider``; pass ``api_factory`` (callable ->
+    client) for local mode (e.g. :class:`local_disk.LocalAPI`).  When ``live``
+    (a :class:`util.LiveDisplay`) is given, the videos in progress are painted
+    into its dedicated lines; otherwise a 15s heartbeat logs them so a slow
+    frame does not look like a hang.
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -201,7 +203,10 @@ def process_many(provider, videos: list[dict], cfg: dict, workers: int | None = 
     def get_api():
         api = getattr(local, "api", None)
         if api is None:
-            api = ThunderAPI(provider, cfg)
+            if api_factory is not None:
+                api = api_factory()
+            else:
+                api = ThunderAPI(provider, cfg)
             local.api = api
         return api
 

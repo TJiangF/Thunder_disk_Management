@@ -70,6 +70,7 @@ _PATCH_ATTRS = (
     "QUEUE_FILE", "SHOTS_STATE_FILE", "SELECTIONS_FILE", "SCAN_STATE_FILE",
     "REVIEW_PROGRESS_FILE", "CHROME_PROFILE", "CONFIG_FILE", "BACKUP_DIR",
     "DEFAULT_HOME", "LOCATION_FILE", "RATINGS_FILE",
+    "MODE", "DATA_SUBDIR", "LOCAL_PATH_FILE",
 )
 
 
@@ -103,6 +104,7 @@ def isolated_home(prefix: str = "sweeper-selftest-"):
         util.BACKUP_DIR = util.Path(data) / "backups"
         util.DEFAULT_HOME = util.Path(tmp) / "home"
         util.LOCATION_FILE = util.DEFAULT_HOME / "location.txt"
+        util.LOCAL_PATH_FILE = util.DEFAULT_HOME / "local_path.txt"
         classify._BASE_CACHE.clear()
         util.ensure_dirs()
         yield util.ROOT
@@ -999,6 +1001,131 @@ def test_live(r: Results) -> None:
                 pass
 
 
+def test_local_disk(r: Results) -> None:
+    r.section("本地磁盘模式（scan/分类/截图/review 本地流——只用临时目录，只读）")
+    import subprocess
+
+    from . import classify, local_disk, review_server, screenshots
+
+    with isolated_home("sweeper-local-"):
+        drive = util.Path(util.ROOT) / "drive"
+        sub = drive / "sub1"
+        sub.mkdir(parents=True, exist_ok=True)
+
+        exe = screenshots._ffmpeg_exe()
+        big = str(drive / "HEZ-445.mp4")
+        small = str(drive / "麻豆-试看.mp4")
+        for path, dur in ((big, 4), (small, 1)):
+            subprocess.run(
+                [exe, "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
+                 "-t", str(dur), "-pix_fmt", "yuv420p", path],
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
+        (drive / "readme.txt").write_text("hello\n", encoding="utf-8")
+        (sub / "FC2-fake.mp4").write_bytes(b"x" * 300)  # tiny fake video
+
+        state = local_disk.scan(drive)
+        real = [v for v in state["videos"] if (v.get("size") or 0) > 1_000]
+        r.eq("扫描到 2 个真实视频", len(real), 2)
+        r.eq("跳过回收站目录", all(v["name"] != local_disk.TRASH_DIR_NAME for v in state["videos"]), True)
+        r.eq("文件条目含非视频", any(f["name"] == "readme.txt" and not f["is_video"] for f in state["files"]), True)
+        r.eq("视频带 local_path", all(v.get("local_path") for v in state["videos"]), True)
+        r.eq("路径带前导 /", bool(state["videos"]) and state["videos"][0]["path"].startswith("/"), True)
+
+        byname = {f["name"]: f for f in state["files"]}
+        r.eq("id 稳定", byname["HEZ-445.mp4"]["id"]
+             == local_disk.video_id(byname["HEZ-445.mp4"]["local_path"]), True)
+        p = str(drive)
+        r.eq("intern/extern 往返", str(local_disk.extern(local_disk.intern(p))) == str(drive.resolve()), True)
+
+        root_in = local_disk.intern(drive)
+        partial = {
+            "videos": [v for v in state["videos"] if v["path"] == root_in],
+            "files": [f for f in state["files"] if f["path"] == root_in],
+            "dirs": 1, "frontier": [str(sub)], "visited": [str(drive)],
+            "failed": [], "root": str(drive),
+        }
+        resumed = local_disk.scan(drive, state=partial)
+        r.eq("续扫得到全部视频", sorted(v["name"] for v in resumed["videos"]),
+             sorted(v["name"] for v in state["videos"]))
+
+        util.set_mode("local")
+        drive2 = util.Path(util.ROOT).resolve()
+        util.save_local_path(drive)
+        util.atomic_write_json(util.VIDEOS_FILE, real)
+        util.atomic_write_json(util.FILES_FILE, state["files"])
+
+        classified = classify.categorize_files(state["files"])
+        cat = {c["id"]: c.get("category") for c in classified}
+        r.eq("HEZ-445 → 日本", cat[byname["HEZ-445.mp4"]["id"]], "jp")
+        r.eq("麻豆 → 国产", cat[byname["麻豆-试看.mp4"]["id"]], "cn")
+
+        cfg = util.load_config()
+        target = real[0]
+        out = screenshots.process_video(local_disk.LocalAPI(cfg), target, cfg)
+        r.eq("本地截图生成 8 张", len(out.get("thumbs") or []), len(cfg["fractions"]))
+        r.eq("本地截图时长探测", out.get("duration") is not None and out["duration"] > 0, True)
+
+        vids = [target]
+        port = _free_port()
+        thread = threading.Thread(
+            target=review_server.serve,
+            kwargs={"videos": vids, "port": port, "open_browser": False,
+                    "play_url_fn": lambda f: f"/stream/{f}",
+                    "download_url_fn": lambda f: f"/stream/{f}?download=1"}, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(60):
+            try:
+                _http("GET", base + "/")
+                break
+            except Exception:
+                time.sleep(0.2)
+
+        def status_and_headers(path_, headers=None):
+            req = urllib.request.Request(base + path_, headers=headers or {})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.status, resp.read(), dict(resp.headers)
+            except urllib.error.HTTPError as exc:
+                return exc.code, b"", dict(exc.headers)
+
+        try:
+            st, body, hdrs = status_and_headers("/stream/" + target["id"], {"Range": "bytes=0-99"})
+            r.check("/stream 支持 Range(206)", st == 206, f"st={st}")
+            r.eq("/stream Range 返回 100 字节", len(body), 100)
+            r.eq("/stream 带 Accept-Ranges", hdrs.get("Accept-Ranges"), "bytes")
+
+            st2, _, hdrs2 = status_and_headers("/download/" + target["id"])
+            r.check("/download 本地文件 200", st2 == 200, f"st={st2}")
+            r.check("/download 是附件下载", 'attachment' in (hdrs2.get("Content-Disposition") or ""))
+
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+
+            try:
+                opener = urllib.request.build_opener(_NoRedirect)
+                req = urllib.request.Request(base + "/play/" + target["id"])
+                try:
+                    opener.open(req, timeout=5)
+                    st3, loc = 200, "no-location"
+                except urllib.error.HTTPError as exc:
+                    st3, loc = exc.code, exc.headers.get("Location")
+                r.check("/play 本地跳转到 /stream", st3 == 302 and "/stream/" in (loc or ""),
+                        f"st={st3} loc={loc}")
+            except Exception as exc:
+                r.check("/play 本地跳转到 /stream", False, str(exc))
+        finally:
+            _http("POST", base + "/shutdown", {})
+
+        # local trash moves the file, leaves a copy-safety: never touches scan inputs outside the temp tree
+        dup = util.Path(util.ROOT) / "to-trash.mp4"
+        dup.write_bytes(b"z")
+        moved = local_disk.trash_for(drive, str(dup))
+        r.eq("回收站文件可找到", util.Path(moved).exists() and not dup.exists(), True)
+
+
 def run(live: bool = False) -> int:
     print(f"ThunderSweeper 自检 v{util.app_version()}  (python {sys.version.split()[0]}, "
           f"{sys.platform})")
@@ -1012,6 +1139,7 @@ def run(live: bool = False) -> int:
         ("failure_modes", test_failure_modes),
         ("ui_helpers", test_ui_helpers), ("shutdown", test_shutdown_endpoint),
         ("request_retry", test_request_retry), ("cli", test_cli),
+        ("local_disk", test_local_disk),
     ):
         r.run(name, lambda fn=fn: fn(r))
     if live:
