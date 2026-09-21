@@ -1878,8 +1878,14 @@ def serve(videos: list[dict], port: int = 8765, open_browser: bool = True,
                     fix = qs.get("fix_inside", ["0"])[0] in ("1", "true", "yes")
                     scope = (qs.get("scope", [""])[0] or "").strip() or None
                     move_cats = categories.ids() - set(categories.RESERVED) - {"adult_other"}
-                    plan = organize.load_and_build(util.load_config(), move_cats=move_cats,
-                                                   fix_inside=fix, scope=scope)
+                    if util.is_local():
+                        from . import local_disk
+
+                        plan = local_disk.build_local_plan(util.load_config(), move_cats=move_cats,
+                                                           fix_inside=fix, scope=scope)
+                    else:
+                        plan = organize.load_and_build(util.load_config(), move_cats=move_cats,
+                                                       fix_inside=fix, scope=scope)
                     payload = {"ok": True, "plan": plan}
                 except Exception as exc:
                     util.log(f"生成整理方案失败: {exc}", "ERROR")

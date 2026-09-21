@@ -1132,6 +1132,18 @@ def test_local_disk(r: Results) -> None:
                 r.eq("/open 非本地文件 404", st404, 404)
             finally:
                 util.open_path = saved_open
+
+            try:
+                _, j = _http("GET", base + "/organize")
+                p = j.get("plan") or {}
+                lb = local_disk.intern(local_disk.base_folder(drive))
+                r.eq("本地 web 整理 base 正确", p.get("base"), lb)
+                r.check("本地 web 整理目标都带本地根",
+                        all((m.get("to") or "").startswith(lb) for m in p.get("moves") or []))
+                s = p.get("summary") or {}
+                r.check("本地 web 整理不会反复列出已整理文件", int(s.get("move_count", 0)) < 10)
+            except Exception as exc:
+                r.check("本地 web 整理接口可用", False, str(exc))
         finally:
             _http("POST", base + "/shutdown", {})
 
