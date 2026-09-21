@@ -12,6 +12,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Optional
@@ -87,7 +88,10 @@ def _kill_our_chrome(port: int) -> None:
     """Kill only the debug Chrome that uses our dedicated profile."""
     profile = str(util.CHROME_PROFILE)
     try:
-        subprocess.run(["pkill", "-f", profile], check=False)
+        if sys.platform.startswith("win"):
+            _kill_on_windows(port)
+        else:
+            subprocess.run(["pkill", "-f", profile], check=False)
     except Exception:
         pass
     deadline = time.time() + 10
@@ -97,6 +101,34 @@ def _kill_our_chrome(port: int) -> None:
         util.log(f"端口 {port} 仍被占用，可手动结束该 Chrome 进程", "WARN")
     else:
         util.log("已关闭旧的调试 Chrome", "INFO")
+
+
+def _kill_on_windows(port: int) -> None:
+    """Windows: kill the process tree listening on the debug port.
+
+    ``netstat -ano`` maps 127.0.0.1:PORT → PID of the root Chrome process of
+    that debugging profile; ``taskkill /T`` kills its children too.  Only the
+    leftover debug Chrome is affected, never the user's normal Chrome.
+    """
+    out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
+                         capture_output=True, text=True,
+                         encoding="utf-8", errors="replace").stdout
+    for line in out.splitlines():
+        if f":{port}" not in line or "LISTENING" not in line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        pid = parts[-1]
+        if pid == "0":
+            continue
+        try:
+            int(pid)
+        except ValueError:
+            continue
+        subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
 
 
 def _port_open(port: int) -> bool:

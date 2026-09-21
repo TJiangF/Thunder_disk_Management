@@ -19,10 +19,13 @@ def _check_deps() -> None:
         print(
             "缺少依赖: " + ", ".join(missing) + "\n"
             "请用项目虚拟环境运行（推荐）：\n"
-            "  ./sweeper <命令>\n"
+            "  ./sweeper <命令>             (macOS / Linux)\n"
+            "  sweeper.bat <命令>            (Windows)\n"
             "或先激活环境并安装依赖：\n"
-            "  source .venv/bin/activate\n"
-            "  python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt",
+            "  source .venv/bin/activate                          # macOS / Linux\n"
+            "  .venv\\Scripts\\activate                            # Windows\n"
+            "  python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt\n"
+            "  再补一个 ffmpeg：python -m pip install imageio-ffmpeg",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -658,6 +661,7 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 
 
 def main(argv=None):
+    util.ensure_utf8_stdio()
     _check_deps()
     util.ensure_dirs()
     parser = argparse.ArgumentParser(
@@ -672,7 +676,7 @@ def main(argv=None):
     p_login.add_argument("--restart", action="store_true", help="先关闭旧的调试 Chrome 再重新启动")
     p_status = sub.add_parser("status", help="查看当前状态")
 
-    p_home = sub.add_parser("home", help="查看/设置数据目录（默认 ~/Library/Application Support/ThunderSweeper）")
+    p_home = sub.add_parser("home", help="查看/设置数据目录（默认 macOS ~/Library/Application Support/ThunderSweeper；Windows %%APPDATA%%\\ThunderSweeper）")
     p_home.add_argument("path", nargs="?", help="新的数据目录；省略则显示当前目录")
     p_home.add_argument("--reset", action="store_true", help="恢复默认数据目录")
 

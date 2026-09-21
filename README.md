@@ -24,6 +24,8 @@
 
 **最省事（打包版）**：双击 `迅雷云盘整理助手.app`，按菜单 1→2→3→4→5 走。
 
+**Windows 用户**：见 [0.5 Windows 使用](#05-windows-使用)（数据目录为 `%APPDATA%\ThunderSweeper`，入口为 `sweeper.bat`）。
+
 **源码版**：
 
 ```bash
@@ -38,6 +40,51 @@ cd /Users/tf/thunder_video_sweeper
 ```
 
 不带参数运行 `./sweeper` 会进入**交互式菜单**；`./sweeper selftest` 可自检。
+
+---
+
+## 0.5 Windows 使用
+
+代码是**同一份、跨平台**（macOS / Windows 单分支，平台差异按 `sys.platform` 在内部判断），
+Windows 上无需改码。下面是 Windows 的差异点：
+
+**安装依赖（PowerShell，项目根目录）**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt   # 含 imageio-ffmpeg，自带 ffmpeg
+```
+
+**统一入口 `sweeper.bat`**：等价于 macOS 的 `./sweeper`，自动优先使用 `.venv\Scripts\python.exe`：
+
+```powershell
+sweeper.bat login --restart
+sweeper.bat scan --resume
+sweeper.bat classify
+sweeper.bat shots --top 20
+sweeper.bat review
+sweeper.bat apply
+```
+
+或直接用系统 Python：`python -m thunder_sweeper <命令>`（注意别用错解释器，会缺 websocket）。
+
+**首选的浏览器**：Chrome / Edge / Brave / Chromium 会自动探测（含
+`C:\Program Files\...\chrome.exe`、`...\msedge.exe` 等标准路径）；
+也可在 `config.json` 设 `chrome_path` 或设置环境变量 `THUNDER_SWEEPER_CHROME`。
+
+**数据目录**：默认 `%APPDATA%\ThunderSweeper\data`（`sweeper.bat home` 可查看/修改）。
+
+**打包（Windows）**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build_win.ps1
+```
+
+产物 `dist\ThunderSweeper\ThunderSweeper.exe`（onedir，内置 ffmpeg，双击/命令行运行）+
+`dist\ThunderSweeper-<ver>-win64.zip`。
+
+**已知小差异**：终端固定面板/进度条使用 ANSI 控制码与 `█░` 字符，
+在 Windows Terminal / 新版 PowerShell 下正常；旧版 cmd 下可能显示乱码（功能性不受影响）。
 
 ---
 

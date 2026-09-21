@@ -18,6 +18,21 @@ APP_VERSION = "1.0.0"
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 
 
+def ensure_utf8_stdio() -> None:
+    """Force UTF-8 on stdout/stderr.
+
+    On Windows the console may default to cp1252/cp936; Chinese ("ThunderSweeper")
+    and block chars (``█░``) then crash with UnicodeEncodeError.  Reconfiguring
+    to UTF-8 is a harmless no-op on macOS/Linux.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _os_home() -> Path:
     """Platform per-user data directory for this app."""
     if sys.platform == "darwin":

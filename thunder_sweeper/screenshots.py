@@ -45,7 +45,8 @@ def _ffprobe_exe():
 def ensure_tools() -> None:
     if not _ffmpeg_exe():
         raise ToolMissing(
-            "缺少 ffmpeg，请安装：brew install ffmpeg（或 pip install imageio-ffmpeg）"
+            "缺少 ffmpeg，请安装：brew install ffmpeg / winget install ffmpeg"
+            "（或 pip install imageio-ffmpeg）"
         )
 
 
@@ -74,7 +75,7 @@ def _probe_text(url: str, cfg: dict) -> dict:
         *_input_headers(url), "-i", url,
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True,
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                              timeout=cfg["ffmpeg_timeout"] + 15)
     except subprocess.TimeoutExpired:
         return {}
@@ -97,7 +98,7 @@ def _probe_json(ffprobe: str, url: str, cfg: dict) -> dict:
         *_input_headers(url), url,
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True,
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                              timeout=cfg["ffmpeg_timeout"] + 15)
     except subprocess.TimeoutExpired:
         util.log("ffprobe 超时", "WARN")
@@ -142,7 +143,7 @@ def grab(url: str, seconds: float, out_path: Path, cfg: dict) -> str:
         "-y", str(out_path),
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=cfg["ffmpeg_timeout"])
     except subprocess.TimeoutExpired:
         util.log(f"截图超时 @ {seconds:.0f}s", "WARN")

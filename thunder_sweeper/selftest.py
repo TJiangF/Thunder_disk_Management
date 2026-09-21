@@ -174,9 +174,10 @@ def test_util(r: Results) -> None:
         cloud_config.apply_bundle({"ratings": {"y": 3}})
         r.eq("配置包可应用", util.read_json(util.RATINGS_FILE), {"y": 3})
 
-        os.environ["THUNDER_SWEEPER_HOME"] = "/tmp/ts-home-test"
+        tmp_home = os.path.join(tempfile.gettempdir(), "ts-home-test")
+        os.environ["THUNDER_SWEEPER_HOME"] = tmp_home
         try:
-            r.eq("环境变量指定数据目录", str(util._default_home()), os.path.realpath("/tmp/ts-home-test"))
+            r.eq("环境变量指定数据目录", str(util._default_home()), os.path.realpath(tmp_home))
         finally:
             os.environ.pop("THUNDER_SWEEPER_HOME", None)
 
@@ -492,7 +493,7 @@ def test_ffmpeg_pipeline(r: Results) -> None:
                 [exe, "-y", "-hide_banner", "-loglevel", "error",
                  "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10",
                  "-t", "3", "-pix_fmt", "yuv420p", src],
-                capture_output=True, text=True)
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
             ok = gen.returncode == 0 and os.path.exists(src) and os.path.getsize(src) > 0
             r.check("生成测试视频", ok, gen.stderr[-200:] if not ok else "")
             if not ok:
@@ -723,22 +724,22 @@ def test_cli(r: Results) -> None:
     tmp = tempfile.mkdtemp(prefix="sweeper-cli-")
     env = dict(os.environ, THUNDER_SWEEPER_HOME=tmp)
     try:
-        out = subprocess.run(cmd_prefix + ["--version"], capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd_prefix + ["--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         r.eq("--version 退出码", out.returncode, 0)
         r.check("--version 输出程序名", "ThunderSweeper" in (out.stdout + out.stderr))
 
-        out = subprocess.run(cmd_prefix + ["-h"], capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd_prefix + ["-h"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         r.eq("-h 退出码", out.returncode, 0)
         for cmd in ("login", "scan", "classify", "organize", "review", "selftest"):
             r.check(f"帮助含子命令 {cmd}", cmd in out.stdout)
 
-        out = subprocess.run(cmd_prefix + ["no_such_command"], capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd_prefix + ["no_such_command"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         r.check("未知子命令非零退出", out.returncode != 0)
 
-        out = subprocess.run(cmd_prefix + ["status"], capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd_prefix + ["status"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         r.eq("status 空数据可运行", out.returncode, 0)
 
-        out = subprocess.run(cmd_prefix + ["organize"], capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd_prefix + ["organize"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         r.check("无扫描数据时也能预览（不崩溃）",
                 out.returncode == 0 and "移动" in (out.stdout + out.stderr),
                 f"rc={out.returncode} out={(out.stdout + out.stderr)[:150]}")
@@ -853,7 +854,8 @@ def test_failure_modes(r: Results) -> None:
             "main()\n"
         )
         out = subprocess.run([sys.executable, "-c", script], capture_output=True,
-                             text=True, env=dict(os.environ, THUNDER_SWEEPER_HOME=tmp),
+                             text=True, encoding="utf-8", errors="replace",
+                             env=dict(os.environ, THUNDER_SWEEPER_HOME=tmp),
                              cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         kept = util.read_json(util.Path(data) / "videos.json")
         r.check("扫描失败时保留原有 videos.json",
